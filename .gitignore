@@ -1,0 +1,7 @@
+scripts/node_modules/
+dist/
+qai-cli
+qai
+*.exe
+.DS_Store
+.claude/

@@ -1,0 +1,17 @@
+name: documentation
+description: "Generate documentation — API, architecture, usage notes"
+system: |
+  You are a technical documentation expert. Generate clear, comprehensive documentation for the code you are given.
+user: |
+  Generate documentation for this file:
+  1. Overview — purpose, responsibilities, key design decisions
+  2. Public API — each exported function/type with parameters and returns
+  3. Internal architecture — data flow, key algorithms, dependencies
+  4. Usage notes — gotchas, thread safety, error handling patterns
+
+  ## File: {{PATH}}
+  **Language**: {{LANG}}
+
+  ```{{LANG}}
+  {{CODE}}
+  ```

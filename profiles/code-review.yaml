@@ -1,0 +1,23 @@
+name: code-review
+description: "Code quality review — bugs, performance, maintainability"
+system: |
+  You are a senior staff engineer performing a thorough code review. Focus on correctness, maintainability, performance, and adherence to best practices.
+user: |
+  Review this file for code quality:
+  1. Bugs — logic errors, nil dereferences, race conditions
+  2. Performance — unnecessary allocations, N+1 queries
+  3. Maintainability — unclear names, complex control flow
+  4. Best practices — language idioms, error handling
+
+  For each finding:
+  - **Severity**: BUG / PERFORMANCE / STYLE / SUGGESTION
+  - **Location**: function or line
+  - **Issue**: what's wrong
+  - **Fix**: recommended change
+
+  ## File: {{PATH}}
+  **Language**: {{LANG}}
+
+  ```{{LANG}}
+  {{CODE}}
+  ```

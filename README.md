@@ -136,6 +136,50 @@ qai term close "name"                 # close terminal
 qai term snapshot                     # overview all terminals
 ```
 
+#### Delegation and parallel agents
+
+The commands above are the mechanical surface. The capability they unlock is bigger than the syntax suggests: they let a parent agent (Claude, Gemini, a local model, or a human) spawn subagents that **inherit the parent's live conversation context** rather than starting fresh with a briefing document.
+
+Every multi-agent framework on the market — LangChain, AutoGen, CrewAI, and the long tail behind them — treats a subagent as a new process that receives a prompt. The parent serialises its accumulated understanding into a system prompt, the subagent decodes that summary into an approximation of the context, and every delegation is lossy. Ten minutes of human correction of the parent agent gets flattened into a paragraph before the subagent ever runs.
+
+`qai term` gives you a different pattern. The parent agent spawns a named tmux pane and writes instructions into it as if it were talking to a teammate who was already in the room when the decisions were made — because it is, in the sense that matters. The parent composes the subagent's instructions *after* the human has been iterating with the parent for an hour, so the instructions encode not just the task but every correction the human has made, every blind alley the parent has recognised, every taste judgement the parent and the human arrived at together.
+
+The human can attach to any pane in their terminal emulator (iTerm, Ghostty, Terminal.app, SSH session, phone), read the subagent's live output, type a correction directly to it, and detach. The subagent carries on with the correction applied. This capability does not exist as a first-class surface in any of the mainstream agent frameworks.
+
+Example — three subagents running in parallel, each forked from the same parent conversation:
+
+```bash
+# Parent Claude in your current chat spawns three panes
+qai term spawn research --cwd /work/project
+qai term spawn writer   --cwd /work/project
+qai term spawn redteam  --cwd /work/project
+
+qai term send research "gather recent papers on agent observability,
+  write findings to facts.json; constraints we already agreed in this
+  conversation: no marketing posts, no LinkedIn, arXiv preferred."
+
+qai term send writer   "when facts.json exists, draft article.md in
+  the house voice we've been refining; no claims outside facts.json."
+
+qai term send redteam  "read article.md and flag every sentence that
+  makes a claim not supported by a specific line in facts.json."
+
+# At any point, the human or the parent can snapshot all panes,
+# read a specific subagent's reasoning, and inject a correction:
+qai term snapshot
+qai term read writer --lines 200
+qai term send redteam "sections 1 and 3 are approved; focus on 2 and 4"
+```
+
+#### Two mitigations worth building in
+
+1. **Ground-truth checkpoint before the fork.** Context inheritance scales failures as well as successes. If the parent has accumulated a wrong assumption, every subagent forking from it will confidently repeat the error in parallel. Before spawning the crew, have the parent run a command, read a document or verify a test — something external to the conversation — to pin a claim to reality.
+2. **Heterogeneous crew.** Don't spawn N identical workers; spawn N-1 workers and one adversary. Ideally the adversary uses a different model family (e.g. Claude-writes, Gemini-red-teams) so it brings a different training distribution's error profile. `qai conduct chat` is model-agnostic — each pane is free to call whichever model it wants.
+
+#### Why tmux and not a bespoke dashboard
+
+tmux is already the primitive. Session persistence across disconnects, SSH-from-anywhere, keyboard-driven pane navigation, scrollback search, working clipboard, integration with every terminal emulator. A custom agent-supervision GUI reinvents 90% of that badly. If your observability surface can't be attached from an SSH session on a phone, it's a status page, not an observability surface.
+
 ### Browser Automation (CDP)
 
 Connects to your existing Chrome/Brave via the DevTools Protocol debug port. No headless browser, no Playwright, no Node.js — uses your real browser session with all cookies, auth, and fingerprints intact.
@@ -219,10 +263,50 @@ qai db shell                          # interactive SurrealQL
 
 Mixed embedding dimensions coexist in the same database — 768-dim (Ollama), 4096-dim (Qwen3-8B), or anything else. Search automatically matches query dimension to stored vectors.
 
+### Product Scraper (`qai scrape`)
+
+A pluggable, real-browser scraping pipeline for affiliate / research
+workflows. Drives `qai clip` (Playwright → Joplin) to bypass bot
+detection, parses the clipped note with a per-site preset, and emits a
+JSON brief ready to hand to a review-writing agent.
+
+```bash
+# Single URL — preset auto-detected from hostname
+qai scrape https://www.amazon.co.uk/dp/B0BT9R5XNN
+
+# Explicit preset, custom image directory
+qai scrape --amazon https://www.amazon.com/dp/B0GR1K7LHC \
+           --image-dir ./site/public/product-images
+
+# Build URL from product ID
+qai scrape --preset amazon --id B0BT9R5XNN
+
+# Batch from CSV, JSONL output, 3 workers, resumable
+qai scrape --csv products.csv -o briefs.jsonl --parallel 3 --resume
+```
+
+CSV format is dead simple — one URL per line is enough; optional
+`url,preset,notebook` header row for per-row overrides.
+
+Per-URL pipeline:
+
+1. `qai clip <url>` — Playwright drives a real browser, writes to Joplin
+2. Fetch the note via Joplin Data API (direct-by-ID, no search lag)
+3. Preset parser extracts title, price, bullets, spec table, related IDs
+4. Walk note's embedded images in body order, return the first that
+   passes the preset's hero filters (dims, aspect, format)
+5. Save hero as `<image-dir>/<ID>.jpg`
+6. Emit JSON brief
+
+Presets ship as Go packages — each owns its `ExtractID`, `Parse`,
+`BuildURL`, and `ImageFilters`. The clip/fetch/hero pipeline is shared.
+Amazon is the reference preset; add new ones by calling
+`scrape.RegisterPreset(...)` from a package init().
+
 ### Other
 
 ```bash
-qai clip <url> [notebook] [title]     # clip web page to Joplin
+qai clip <url> [notebook] [title]     # clip web page to Joplin (raw)
 qai models [filter]                   # search model registry
 qai token                             # GCP access token
 qai token --check                     # check ADC validity

@@ -288,7 +288,40 @@ qai scrape --csv products.csv -o briefs.jsonl --parallel 3 --resume
 CSV format is dead simple — one URL per line is enough; optional
 `url,preset,notebook` header row for per-row overrides.
 
-Per-URL pipeline:
+#### Two-stage: scout → scrape
+
+For building a review library you rarely know all the URLs up front —
+you have a category query. `--scout` turns a search / listing page into
+a CSV of product URLs, which then feeds straight back into the normal
+batch scraper.
+
+```bash
+# Stage 1 — scout a listing (~2s for 15 ASINs, direct HTTP fetch)
+qai scrape --scout "https://www.amazon.co.uk/s?k=amd+threadripper" \
+           --max 30 -o threadrippers.csv
+
+# Stage 2 — scrape each product (real browser, anti-bot bypass)
+qai scrape --csv threadrippers.csv --parallel 3 -o briefs.jsonl --resume
+```
+
+The two stages deliberately use different engines because they face
+different threat models:
+
+- **Scout** is a plain `GET` with a realistic `User-Agent`. Marketplace
+  search pages are server-rendered and ship every `/dp/ASIN` in the
+  initial HTML, so a real browser buys nothing. Clipping them also
+  reliably kills Playwright's `networkidle` wait — search pages poll
+  analytics indefinitely. Direct fetch is both faster and actually
+  works (clip path timed out at 30s; scout returns in ~2s).
+- **Scrape** (per-product) still goes through `qai clip` — a real
+  browser with your cookies is where Amazon's anti-bot actually bites,
+  and where that machinery earns its keep.
+
+`--max N` caps to the first N products (body order mirrors listing
+order, so top N ≈ top results). Output is a headered CSV (`url,preset`)
+that feeds back in via `--csv` with no massaging.
+
+#### Per-URL pipeline
 
 1. `qai clip <url>` — Playwright drives a real browser, writes to Joplin
 2. Fetch the note via Joplin Data API (direct-by-ID, no search lag)
@@ -299,9 +332,10 @@ Per-URL pipeline:
 6. Emit JSON brief
 
 Presets ship as Go packages — each owns its `ExtractID`, `Parse`,
-`BuildURL`, and `ImageFilters`. The clip/fetch/hero pipeline is shared.
-Amazon is the reference preset; add new ones by calling
-`scrape.RegisterPreset(...)` from a package init().
+`BuildURL`, and `ImageFilters`, with optional `Scout(body, searchURL)`
+and `ScoutTitle(searchURL)` for listing extraction. The clip/fetch/hero
+pipeline is shared. Amazon is the reference preset; add new ones by
+calling `scrape.RegisterPreset(...)` from a package `init()`.
 
 ### Other
 

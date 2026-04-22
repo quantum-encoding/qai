@@ -20,6 +20,7 @@ Modes:
   qai scrape --amazon <url>                 Preset shorthand (--preset amazon)
   qai scrape --id <id> --preset amazon      Build URL from product ID
   qai scrape --csv targets.csv              Batch from CSV
+  qai scrape --scout <search-url>           Extract product URLs → CSV
 
 Flags:
   --preset <name>        Preset to use. Auto-detected from URL if omitted.
@@ -34,6 +35,10 @@ Flags:
                          Joplin's search index can struggle with concurrent
                          writes.
   --resume               With --csv and --out, skip URLs already present.
+  --scout                Treat the target as a search/listing URL. Emits
+                         a CSV of discovered product URLs (one per row),
+                         ready to feed back via --csv.
+  --max <n>              With --scout, cap discovered URLs to the first N.
 
 CSV format:
   Headerless (one URL per line):
@@ -69,6 +74,11 @@ Examples:
 
   # Batch 50 products with 3 workers, JSONL output, resumable.
   qai scrape --csv products.csv --parallel 3 -o briefs.jsonl --resume
+
+  # Two-stage: scout a search page, then batch-scrape the results.
+  qai scrape --scout "https://www.amazon.co.uk/s?k=threadripper" \
+             --max 30 -o threadrippers.csv
+  qai scrape --csv threadrippers.csv --parallel 3 -o briefs.jsonl
 
 Output:
   {

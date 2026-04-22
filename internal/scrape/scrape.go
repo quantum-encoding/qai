@@ -34,6 +34,16 @@ func CmdScrape(args []string) {
 		os.Exit(1)
 	}
 
+	if opts.scout {
+		searchURL := opts.target
+		preset := resolveScoutPreset(opts, searchURL)
+		if preset == nil {
+			os.Exit(1)
+		}
+		runScout(searchURL, preset, opts)
+		return
+	}
+
 	productURL, preset, err := resolveTarget(opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai scrape: %v\n", err)
@@ -48,6 +58,27 @@ func CmdScrape(args []string) {
 	emit(brief, opts)
 }
 
+// resolveScoutPreset picks the preset for a scout URL. Unlike
+// resolveTarget this doesn't try to ExtractID — a search/listing URL
+// won't contain a product ID by definition.
+func resolveScoutPreset(opts *flags, searchURL string) *Preset {
+	if opts.preset != "" {
+		p := PresetByName(opts.preset)
+		if p == nil {
+			fmt.Fprintf(os.Stderr, "qai scrape: unknown preset %q (available: %s)\n",
+				opts.preset, strings.Join(PresetNames(), ", "))
+			return nil
+		}
+		return p
+	}
+	p := PresetForURL(searchURL)
+	if p == nil {
+		fmt.Fprintf(os.Stderr, "qai scrape: no preset matches %s — pass --preset <name>\n", searchURL)
+		return nil
+	}
+	return p
+}
+
 // ─── flags ───────────────────────────────────────────────────────────────
 
 type flags struct {
@@ -60,6 +91,8 @@ type flags struct {
 	outPath    string
 	parallel   int
 	resume     bool
+	scout      bool
+	scoutMax   int
 }
 
 func parseFlags(args []string) *flags {
@@ -113,6 +146,17 @@ func parseFlags(args []string) *flags {
 			}
 		case "--resume":
 			opts.resume = true
+		case "--scout":
+			opts.scout = true
+		case "--max":
+			if i+1 < len(args) {
+				n := 0
+				_, _ = fmt.Sscanf(args[i+1], "%d", &n)
+				if n > 0 {
+					opts.scoutMax = n
+				}
+				i++
+			}
 		default:
 			if opts.target == "" && !strings.HasPrefix(args[i], "-") {
 				opts.target = args[i]

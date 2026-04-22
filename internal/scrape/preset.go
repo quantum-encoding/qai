@@ -43,6 +43,19 @@ type Preset struct {
 	// to feed canonical fields.
 	Parse func(body, id string) map[string]any
 
+	// Scout extracts product URLs from a listing/search-page note body.
+	// Given the page body and the original search URL (for TLD/host
+	// preservation), returns canonical product URLs in body order,
+	// deduped by ID. Used by `qai scrape --scout`. May be nil if the
+	// preset doesn't support listing discovery.
+	Scout func(body, searchURL string) []string
+
+	// ScoutTitle derives a unique Joplin note title for a scout clip
+	// of the given search URL. Used so repeated scouts for the same
+	// query dedupe, but different queries get distinct notes. If nil,
+	// a generic fallback is used.
+	ScoutTitle func(searchURL string) string
+
 	// ImageFilters tunes the hero-picker constraints for this site's
 	// typical layout. Different marketplaces use different hero sizes.
 	ImageFilters ImageFilters

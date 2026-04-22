@@ -2,6 +2,7 @@ package scrape
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -28,6 +29,8 @@ func init() {
 		ExtractID:       amazonExtractASIN,
 		BuildURL:        amazonBuildURL,
 		Parse:           amazonParse,
+		Scout:           amazonScout,
+		ScoutTitle:      amazonScoutTitle,
 		ImageFilters: ImageFilters{
 			MinW:           400,
 			MinH:           400,
@@ -186,4 +189,69 @@ func amazonParse(body, asin string) map[string]any {
 	}
 
 	return out
+}
+
+// ─── scout ───────────────────────────────────────────────────────────────
+
+// amazonScout extracts product URLs from a search / listing page body.
+// Walks the clipped markdown in order, pulls every /dp/<ASIN> reference,
+// dedupes by ASIN, and rebuilds canonical product URLs using the same
+// TLD as the search URL (so an amazon.co.uk search yields amazon.co.uk
+// product links, amazon.com search yields .com links, etc).
+//
+// Amazon search pages also contain ASIN references for:
+//   - "Sponsored" tiles (interleaved with organic results)
+//   - "Customers who bought this also bought" carousels at the bottom
+//   - "Recently viewed" strip in the header
+//
+// We return them all in body order. Callers can --max N to cap at the
+// top results (which are almost always the organic ones since
+// sponsored tiles come after at least one organic row in the DOM).
+func amazonScout(body, searchURL string) []string {
+	host := "www.amazon.co.uk"
+	scheme := "https"
+	if u, err := url.Parse(searchURL); err == nil && u.Host != "" {
+		host = u.Host
+		if u.Scheme != "" {
+			scheme = u.Scheme
+		}
+	}
+
+	seen := map[string]bool{}
+	var urls []string
+	for _, m := range dpRefRe.FindAllStringSubmatch(body, -1) {
+		if len(m) != 2 {
+			continue
+		}
+		asin := m[1]
+		if seen[asin] {
+			continue
+		}
+		seen[asin] = true
+		urls = append(urls, fmt.Sprintf("%s://%s/dp/%s", scheme, host, asin))
+	}
+	return urls
+}
+
+// amazonScoutTitle derives a unique Joplin note title from a search
+// URL. Uses the `k=` query param when present (human-readable); falls
+// back to a hash-y slug of the path+query otherwise.
+func amazonScoutTitle(searchURL string) string {
+	u, err := url.Parse(searchURL)
+	if err != nil {
+		return "Amazon Scout: " + searchURL
+	}
+	q := u.Query().Get("k")
+	if q == "" {
+		// Non-search listing page — use the last path segment.
+		path := strings.Trim(u.Path, "/")
+		if path == "" {
+			return "Amazon Scout: " + u.Host
+		}
+		if idx := strings.LastIndex(path, "/"); idx >= 0 {
+			path = path[idx+1:]
+		}
+		return "Amazon Scout: " + path
+	}
+	return "Amazon Scout: " + q
 }

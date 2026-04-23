@@ -33,6 +33,23 @@ type Config struct {
 	Surreal    SurrealConfig    `yaml:"surreal"`
 	Search     SearchConfig     `yaml:"search"`
 	Vertex     VertexConfig     `yaml:"vertex"`
+	Joplin     JoplinConfig     `yaml:"joplin"`
+	Project    ProjectConfig    `yaml:"project"`
+}
+
+// JoplinConfig points the CLI at the local Joplin Web Clipper service.
+// Token is shown in Joplin → Tools → Options → Web Clipper.
+type JoplinConfig struct {
+	BaseURL string `yaml:"base_url"`
+	Token   string `yaml:"token,omitempty"`
+}
+
+// ProjectConfig holds the currently-active project (Joplin notebook).
+// `qai project --set` writes it; `qai note`, future hooks, etc. can read it
+// to scope writes to the right notebook instead of guessing from cwd.
+type ProjectConfig struct {
+	Name             string `yaml:"name,omitempty"`
+	JoplinNotebookID string `yaml:"joplin_notebook_id,omitempty"`
 }
 
 type EmbeddingsConfig struct {
@@ -110,6 +127,7 @@ func Default() *Config {
 		},
 		Search: SearchConfig{Default: "local"},
 		Vertex: VertexConfig{Region: "europe-west4"},
+		Joplin: JoplinConfig{BaseURL: "http://127.0.0.1:41184"},
 	}
 }
 
@@ -159,6 +177,13 @@ func overlayEnvVars(c *Config) {
 	if v := os.Getenv("GCP_PROJECT"); v != "" { c.Vertex.Project = v }
 	if v := os.Getenv("GCP_REGION"); v != "" { c.Vertex.Region = v }
 	if v := os.Getenv("GCS_BUCKET"); v != "" { c.Vertex.Bucket = v }
+	// JOPLIN_TOKEN + JOPLIN_BASE_URL match the env-var names the Rust
+	// chronicler and the Claude Code hook already use.
+	if v := os.Getenv("JOPLIN_TOKEN"); v != "" { c.Joplin.Token = v }
+	if v := os.Getenv("JOPLIN_BASE_URL"); v != "" { c.Joplin.BaseURL = v }
+	// QAI_PROJECT lets a shell export override the active project for a
+	// single session without touching the YAML file.
+	if v := os.Getenv("QAI_PROJECT"); v != "" { c.Project.Name = v }
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────

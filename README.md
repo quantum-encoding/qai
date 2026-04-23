@@ -98,6 +98,71 @@ qai ask "question"                    # AI-grounded answer
 qai context "query"                   # LLM-optimized content chunks
 ```
 
+### Projects & Agent Store (Joplin)
+
+qai persists per-project context and a portable agent "brain" in a local
+Joplin instance. Notebooks become the shared surface between CLI sessions,
+Claude Code hooks, and anything else that can POST to the Joplin Web Clipper
+— so the "work behind the work" accumulates next to the notes, searchable
+from anywhere and editable in the Joplin UI.
+
+#### Projects
+
+```bash
+qai project                           # same as --list
+qai project --list            [-j]    # list notebooks (active one marked *)
+qai project --create "<name>"         # create + set active
+qai project --set    "<name>"         # switch active project
+qai project --current         [-j]    # show active project + notebook id
+qai project --show   "<name>" [-j]    # details + recent notes (newest first)
+qai project --notes           [-j]    # list notes in the active project
+qai project --copy <dir>      [-n]    # recursively copy a folder into the
+                                      # active project as one note per file
+```
+
+The active project is persisted to `~/.qai/config.yaml` so future
+subcommands and Claude Code hooks can target it without re-asking.
+
+`--copy` walks the tree, skips hidden dirs (`.git`, `.venv`, `.next`, …)
+plus `node_modules`, `dist`, `build`, `target`, `__pycache__`, `venv`,
+`env`. Each text file becomes a note titled by its relative path with a
+fenced code block. Re-runs update existing notes in place (matched by
+title) so you can `--copy` after every commit without duplicates. Files
+over 1 MiB or with a NUL byte in the first 512 bytes are skipped as binary.
+
+#### Agent store
+
+```bash
+qai agent init                # create AGENT notebook + seed from ~/.claude
+qai agent init --deep         # also walk ~/work for SKILL.md/CLAUDE.md/agents/*.md
+qai agent sync                # alias for init (re-runs are idempotent)
+qai agent list        [-j]    # list stored skills / agents / instructions
+qai agent add <file>  [-n]    # classify a single file and add it
+qai agent status      [-j]    # show notebook id + counts
+```
+
+Creates a top-level `AGENT` notebook with three sub-notebooks:
+
+- `Skills/` — `SKILL.md` files and standalone `skills/<name>.md`.
+  Reference files inside a skill's tree (e.g. `skills/foo/references/*.md`)
+  roll into their parent SKILL.md instead of spawning separate notes.
+- `Agents/` — direct children of any `agents/` directory. Files nested
+  deeper are treated as support material for the profile above them.
+- `Instructions/` — `CLAUDE.md` files (global from `~/.claude/`, plus
+  per-project ones when `--deep` is set).
+
+Think of it as a Joplin-hosted `~/.claude/`: the knowledge every project
+depends on but isn't tied to any single one. Portable across machines,
+searchable via `qai search --joplin "<term>"`, editable in the Joplin UI.
+
+#### Environment
+
+| Var               | Default                    | Notes |
+|-------------------|----------------------------|-------|
+| `JOPLIN_TOKEN`    | —                          | Required. Web Clipper API token (Joplin → Tools → Options → Web Clipper) |
+| `JOPLIN_BASE_URL` | `http://127.0.0.1:41184`   | Override Joplin endpoint (e.g. running on a different port) |
+| `QAI_PROJECT`     | —                          | Override the active project name for a single session |
+
 ### Media Generation
 
 ```bash
@@ -382,6 +447,7 @@ Features: parallel workers (`-c`), exponential backoff on rate limits, per-file 
 - **For `qai conduct`**: `QAI_API_KEY` environment variable
 - **For `qai term`**: tmux
 - **For `qai browser`**: Chrome, Brave, or Edge with `--remote-debugging-port`
+- **For `qai project` / `qai agent`**: Joplin Desktop with Web Clipper Service enabled, plus `JOPLIN_TOKEN` env var
 
 ## Plugins
 

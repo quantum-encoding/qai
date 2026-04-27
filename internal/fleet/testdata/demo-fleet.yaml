@@ -1,0 +1,71 @@
+# demo-fleet.yaml — end-to-end demo of qai fleet.
+#
+# Four panes, each does a tiny self-contained task and reports done.
+# Reporting is enabled, so the notifier collects the four reports,
+# debounces, and fires a single [FLEET] nudge into the architect pane.
+#
+# Run with:  qai fleet up internal/fleet/testdata/demo-fleet.yaml
+
+version: 1
+
+defaults:
+  startup_timeout: 30s
+  reporting:
+    enabled: true
+
+panes:
+  - name: count-go
+    cwd: /Users/director/work/qai/internal/fleet
+    agent:
+      kind: fresh
+      cmd: claude
+      args: ["--permission-mode", "auto"]
+    prompt: |
+      Count the .go files in this directory (non-recursive). Reply with
+      just the count, then run this command in your shell:
+
+        qai report --status done --message "count-go: N files"
+
+      where N is the count. Then exit.
+
+  - name: count-tests
+    cwd: /Users/director/work/qai/internal/fleet
+    agent:
+      kind: fresh
+      cmd: claude
+      args: ["--permission-mode", "auto"]
+    prompt: |
+      Count the *_test.go files in this directory (non-recursive). Reply
+      with just the count, then run:
+
+        qai report --status done --message "count-tests: N files"
+
+      Then exit.
+
+  - name: lines-readme
+    cwd: /Users/director/work/qai
+    agent:
+      kind: fresh
+      cmd: claude
+      args: ["--permission-mode", "auto"]
+    prompt: |
+      Count the lines in README.md. Reply with just the line count,
+      then run:
+
+        qai report --status done --message "lines-readme: N lines"
+
+      Then exit.
+
+  - name: list-skills
+    cwd: /Users/director/.claude/skills
+    agent:
+      kind: fresh
+      cmd: claude
+      args: ["--permission-mode", "auto"]
+    prompt: |
+      Count immediate subdirectories of this directory (each is one
+      skill). Reply with just the count, then run:
+
+        qai report --status done --message "list-skills: N skills"
+
+      Then exit.

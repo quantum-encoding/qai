@@ -68,7 +68,7 @@ func CmdInbox(args []string) {
 
 	read := func() ([]Report, error) {
 		if unread {
-			return ReadUnread(fleetID)
+			return ReadUnread(fleetID, CursorArchitect)
 		}
 		return ReadAll(fleetID)
 	}
@@ -98,7 +98,7 @@ func CmdInbox(args []string) {
 	// --watch + --unread: cursor was already advanced by the read above
 	// (which returned 0 records); re-read to advance again over the new
 	// records that just arrived.
-	fresh, err := ReadUnread(fleetID)
+	fresh, err := ReadUnread(fleetID, CursorArchitect)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai fleet inbox: %v\n", err)
 		os.Exit(1)
@@ -147,10 +147,10 @@ func waitForNewReport(fleetID string, timeout time.Duration) ([]Report, error) {
 
 	// Drain-before-wait: a record may have arrived between our caller's
 	// last read and watcher setup.
-	if reports, _ := PeekUnread(fleetID); len(reports) > 0 {
+	if reports, _ := PeekUnread(fleetID, CursorArchitect); len(reports) > 0 {
 		// Advance cursor for these — caller path expects "what arrived
 		// while we were waiting" semantics.
-		if _, err := ReadUnread(fleetID); err != nil {
+		if _, err := ReadUnread(fleetID, CursorArchitect); err != nil {
 			return nil, err
 		}
 		return reports, nil
@@ -175,7 +175,7 @@ func waitForNewReport(fleetID string, timeout time.Duration) ([]Report, error) {
 			if ev.Op&(fsnotify.Write|fsnotify.Create) == 0 {
 				continue
 			}
-			reports, err := ReadUnread(fleetID)
+			reports, err := ReadUnread(fleetID, CursorArchitect)
 			if err != nil {
 				return nil, err
 			}

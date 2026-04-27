@@ -12,12 +12,14 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -49,15 +51,37 @@ func Up(ctx context.Context, spec *Spec) (string, error) {
 		return "", err
 	}
 
+	// Per-pane name → tmux-pane-id mapping. Claude Code rewrites the
+	// pane title to "Claude Code" once it takes over, so we cannot
+	// look panes up by manifest name after spawn — every later
+	// operation (status, snapshot, send, close) addresses the pane id.
+	var (
+		mu    sync.Mutex
+		panes = make(map[string]string, len(spec.Panes))
+	)
+
 	g, gctx := errgroup.WithContext(ctx)
 	for _, pane := range spec.Panes {
 		pane := pane
 		g.Go(func() error {
-			return spawnAndPrompt(gctx, spec, pane, fleetID)
+			paneID, err := spawnAndPrompt(gctx, spec, pane, fleetID)
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			panes[pane.Name] = paneID
+			mu.Unlock()
+			return nil
 		})
 	}
-	if err := g.Wait(); err != nil {
-		return fleetID, err
+	werr := g.Wait()
+	// Persist whatever we got, even on partial failure — Down should
+	// still be able to clean up panes that did spawn.
+	if perr := writePaneMap(fleetID, panes); perr != nil {
+		fmt.Fprintf(os.Stderr, "qai fleet: persist pane map: %v\n", perr)
+	}
+	if werr != nil {
+		return fleetID, werr
 	}
 
 	if spec.Defaults.Reporting.Enabled {
@@ -159,14 +183,24 @@ func stopNotifier(fleetID string) error {
 	return nil
 }
 
-// Down kills the panes named in the spec. Panes not currently alive are
-// silently skipped (already-down is the goal anyway). Errors from
-// individual kills are aggregated, not fatal.
+// Down kills the panes named in the spec by their persisted tmux ids.
+// Panes not currently alive are silently skipped (already-down is the
+// goal anyway). Falls back to name-lookup for entries missing from the
+// map (e.g. a fleet brought up by an older runner).
 func Down(spec *Spec) error {
+	fleetID, err := ResolveActiveFleet()
+	if err != nil {
+		return fmt.Errorf("down: %v", err)
+	}
+	mapping, _ := readPaneMap(fleetID)
+
 	var failures []string
 	for _, pane := range spec.Panes {
-		if err := terminal.Close(pane.Name, true); err != nil {
-			// Ignore "not found" — that's a successful Down.
+		target := pane.Name
+		if id, ok := mapping[pane.Name]; ok {
+			target = id
+		}
+		if err := terminal.Close(target, true); err != nil {
 			if !strings.Contains(err.Error(), "not found") {
 				failures = append(failures, fmt.Sprintf("%s: %v", pane.Name, err))
 			}
@@ -187,45 +221,64 @@ type PaneStatus struct {
 	Cmd   string // current command running in the pane (claude.exe / zsh / …)
 }
 
-// Status enumerates which manifest panes are alive vs missing.
+// Status enumerates which manifest panes are alive vs missing. Looks
+// up by persisted tmux id (Claude Code rewrites titles, making name
+// lookup unreliable).
 func Status(spec *Spec) ([]PaneStatus, error) {
 	live, err := terminal.List()
 	if err != nil {
 		return nil, err
 	}
-	byName := make(map[string]terminal.Pane, len(live))
+	byID := make(map[string]terminal.Pane, len(live))
 	for _, p := range live {
-		// Pane titles include leading spinner glyphs once claude takes
-		// over, so we match on the trimmed name. terminal.List exposes
-		// the raw title; trim consistently with cleanName below.
-		byName[trimSpinner(p.Name)] = p
+		byID[p.ID] = p
 	}
+
+	fleetID, _ := ResolveActiveFleet()
+	mapping, _ := readPaneMap(fleetID)
+
 	out := make([]PaneStatus, 0, len(spec.Panes))
 	for _, def := range spec.Panes {
-		if p, ok := byName[def.Name]; ok {
+		paneID, ok := mapping[def.Name]
+		if !ok {
+			out = append(out, PaneStatus{Name: def.Name, Alive: false, Cwd: def.Cwd})
+			continue
+		}
+		if p, alive := byID[paneID]; alive {
 			out = append(out, PaneStatus{
-				Name: def.Name, Alive: true, ID: p.ID, Cwd: p.Cwd, Cmd: p.Cmd,
+				Name: def.Name, Alive: true, ID: paneID, Cwd: p.Cwd, Cmd: p.Cmd,
 			})
 		} else {
-			out = append(out, PaneStatus{Name: def.Name, Alive: false, Cwd: def.Cwd})
+			out = append(out, PaneStatus{Name: def.Name, Alive: false, ID: paneID, Cwd: def.Cwd})
 		}
 	}
 	return out, nil
 }
 
-// Snapshot returns a tail of every manifest pane's recent output.
+// Snapshot returns a tail of every manifest pane's recent output, in
+// manifest order. Looks up by persisted pane id and re-labels with the
+// manifest name (otherwise every snapshot title would be "Claude Code").
 func Snapshot(spec *Spec) ([]terminal.PaneSnapshot, error) {
 	all, err := terminal.Snapshot()
 	if err != nil {
 		return nil, err
 	}
-	keep := make(map[string]bool, len(spec.Panes))
-	for _, p := range spec.Panes {
-		keep[p.Name] = true
-	}
-	out := make([]terminal.PaneSnapshot, 0, len(spec.Panes))
+	byID := make(map[string]terminal.PaneSnapshot, len(all))
 	for _, s := range all {
-		if keep[trimSpinner(s.Title)] {
+		byID[s.ID] = s
+	}
+
+	fleetID, _ := ResolveActiveFleet()
+	mapping, _ := readPaneMap(fleetID)
+
+	out := make([]terminal.PaneSnapshot, 0, len(spec.Panes))
+	for _, def := range spec.Panes {
+		paneID, ok := mapping[def.Name]
+		if !ok {
+			continue
+		}
+		if s, alive := byID[paneID]; alive {
+			s.Title = def.Name + " (" + paneID + ")"
 			out = append(out, s)
 		}
 	}
@@ -234,10 +287,10 @@ func Snapshot(spec *Spec) ([]terminal.PaneSnapshot, error) {
 
 // ─── implementation ──────────────────────────────────────────────────────
 
-func spawnAndPrompt(ctx context.Context, spec *Spec, pane PaneDef, fleetID string) error {
+func spawnAndPrompt(ctx context.Context, spec *Spec, pane PaneDef, fleetID string) (string, error) {
 	cmd, err := buildCommand(pane)
 	if err != nil {
-		return fmt.Errorf("pane %q: build cmd: %v", pane.Name, err)
+		return "", fmt.Errorf("pane %q: build cmd: %v", pane.Name, err)
 	}
 	// Inject fleet identity so the worker's `qai report` knows where
 	// to write. POSIX shells parse `KEY=val cmd` as a one-shot env-var
@@ -245,32 +298,70 @@ func spawnAndPrompt(ctx context.Context, spec *Spec, pane PaneDef, fleetID strin
 	cmd = fmt.Sprintf("QAI_FLEET_ID=%s QAI_FLEET_PANE=%s %s",
 		shellQuote(fleetID), shellQuote(pane.Name), cmd)
 
-	if _, err := terminal.Spawn(terminal.SpawnOpts{
+	paneID, err := terminal.Spawn(terminal.SpawnOpts{
 		Name: pane.Name,
 		Cwd:  pane.Cwd,
 		Cmd:  cmd,
-	}); err != nil {
-		return fmt.Errorf("pane %q: spawn: %v", pane.Name, err)
+	})
+	if err != nil {
+		return "", fmt.Errorf("pane %q: spawn: %v", pane.Name, err)
 	}
 
-	// Wait for the agent's REPL. We assume claude here — the only
-	// supported agent in v1; AgentKind in ready.go is the place to plug
-	// in others later.
-	if err := WaitForPrompt(pane.Name, matcherFor(AgentClaude), spec.EffectiveStartupTimeout()); err != nil {
-		return fmt.Errorf("pane %q: %v", pane.Name, err)
+	// Address the pane by its tmux id from here on. The manifest name
+	// was set as the title at spawn, but Claude Code rewrites the title
+	// once it takes over — name-based lookup would fail.
+	if err := WaitForPrompt(paneID, matcherFor(AgentClaude), spec.EffectiveStartupTimeout()); err != nil {
+		return paneID, fmt.Errorf("pane %q (%s): %v", pane.Name, paneID, err)
 	}
 
 	if pane.WaitFor != "" {
 		if err := waitForCtx(ctx, pane.WaitFor, defaultWaitForTimeout); err != nil {
-			return fmt.Errorf("pane %q: wait_for %q: %v", pane.Name, pane.WaitFor, err)
+			return paneID, fmt.Errorf("pane %q (%s): wait_for %q: %v", pane.Name, paneID, pane.WaitFor, err)
 		}
 	}
 
 	prompt := pane.Prompt + spec.Defaults.Reporting.PromptBlock()
-	if err := terminal.Send(pane.Name, prompt, true); err != nil {
-		return fmt.Errorf("pane %q: send: %v", pane.Name, err)
+	if err := terminal.Send(paneID, prompt, true); err != nil {
+		return paneID, fmt.Errorf("pane %q (%s): send: %v", pane.Name, paneID, err)
 	}
-	return nil
+	return paneID, nil
+}
+
+// writePaneMap persists the manifest-name → tmux-pane-id mapping for a
+// fleet. Read by Status / Snapshot / Down to address panes by id even
+// after Claude Code has rewritten their titles.
+func writePaneMap(fleetID string, panes map[string]string) error {
+	if _, err := EnsureFleetDir(fleetID); err != nil {
+		return err
+	}
+	path := filepath.Join(FleetDir(fleetID), "panes.json")
+	data, err := json.MarshalIndent(panes, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// readPaneMap loads the persisted mapping. Returns (nil, nil) if no
+// fleet has been brought up yet (file missing).
+func readPaneMap(fleetID string) (map[string]string, error) {
+	path := filepath.Join(FleetDir(fleetID), "panes.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := map[string]string{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // buildCommand assembles the shell-line that gets sent to a fresh shell

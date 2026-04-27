@@ -117,21 +117,44 @@ func Send(pane, input string, withEnter bool) error {
 		if _, err := tmuxRun("load-buffer", tmpFile); err != nil {
 			return fmt.Errorf("load-buffer: %v", err)
 		}
-		if _, err := tmuxRun("paste-buffer", "-t", paneID); err != nil {
+		// -p enables bracketed-paste mode (wraps the bytes in
+		// `\e[200~ ... \e[201~`). Without it, embedded newlines arrive
+		// as keystrokes and Claude Code treats the input as a
+		// multi-line compose; the follow-up Enter just appends a line
+		// instead of submitting. With bracketed paste, Claude Code
+		// recognises a paste block and the trailing Enter submits.
+		if _, err := tmuxRun("paste-buffer", "-p", "-t", paneID); err != nil {
 			return fmt.Errorf("paste-buffer: %v", err)
 		}
 		if withEnter {
+			// Claude Code shows multi-line pastes as `[Pasted text +N
+			// lines]` and only accepts Enter as "submit" once the
+			// paste is fully rendered. The render tick varies (200ms
+			// works sometimes, fails others under load), so we send
+			// Enter twice with a gap. A second Enter on an already-
+			// submitted (empty) prompt is a no-op in Claude Code.
+			time.Sleep(500 * time.Millisecond)
+			tmuxRun("send-keys", "-t", paneID, "Enter")
+			time.Sleep(500 * time.Millisecond)
 			tmuxRun("send-keys", "-t", paneID, "Enter")
 		}
 		return nil
 	}
 
-	args := []string{"send-keys", "-t", paneID, input}
-	if withEnter {
-		args = append(args, "Enter")
+	// Short path: send the literal text first, then Enter separately
+	// after a settle delay. Same reliability story as the paste path —
+	// rapid back-to-back text+Enter via a single send-keys can be
+	// interpreted by Claude Code as keystroke flood + held submit.
+	if _, err := tmuxRun("send-keys", "-t", paneID, input); err != nil {
+		return err
 	}
-	_, err = tmuxRun(args...)
-	return err
+	if withEnter {
+		time.Sleep(300 * time.Millisecond)
+		tmuxRun("send-keys", "-t", paneID, "Enter")
+		time.Sleep(300 * time.Millisecond)
+		tmuxRun("send-keys", "-t", paneID, "Enter")
+	}
+	return nil
 }
 
 // Read returns the last N lines of a pane's output (ANSI stripped).

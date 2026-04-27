@@ -96,51 +96,65 @@ func ReadAll(fleetID string) ([]Report, error) {
 	return readFrom(fleetID, 0)
 }
 
-// ReadUnread returns reports written since the last call, advances the
-// cursor, and returns the records. If the inbox is empty or has no new
-// data, returns an empty slice and a nil error.
-func ReadUnread(fleetID string) ([]Report, error) {
-	cursor, err := readCursor(fleetID)
+// CursorName names a per-cursor file inside ~/.qai/fleet/<id>/.
+//
+// Two cursors exist independently so the notifier and the architect
+// can each track "how far they've consumed" without stepping on each
+// other:
+//
+//   CursorArchitect — moved by `qai fleet inbox --unread`. Reports past
+//                     this point are what the architect hasn't read yet.
+//   CursorNotifier  — moved by the notifier when it sends a nudge.
+//                     Reports past this point are what the notifier
+//                     hasn't notified about yet.
+type CursorName string
+
+const (
+	CursorArchitect CursorName = "architect-cursor"
+	CursorNotifier  CursorName = "notifier-cursor"
+)
+
+// ReadUnread returns reports past `cursor` and advances `cursor` to
+// the new end-of-file. Empty inbox / no new data → empty slice, nil err.
+func ReadUnread(fleetID string, cursor CursorName) ([]Report, error) {
+	pos, err := readCursor(fleetID, cursor)
 	if err != nil {
 		return nil, err
 	}
-	reports, newCursor, err := readFromTracked(fleetID, cursor)
+	reports, newPos, err := readFromTracked(fleetID, pos)
 	if err != nil {
 		return nil, err
 	}
-	if newCursor != cursor {
-		if err := writeCursor(fleetID, newCursor); err != nil {
+	if newPos != pos {
+		if err := writeCursor(fleetID, cursor, newPos); err != nil {
 			return nil, fmt.Errorf("advance cursor: %v", err)
 		}
 	}
 	return reports, nil
 }
 
-// PeekUnread returns reports past the cursor *without* advancing it.
-// Useful for the notifier, which wants to see what's pending without
-// consuming the records on the architect's behalf.
-func PeekUnread(fleetID string) ([]Report, error) {
-	cursor, err := readCursor(fleetID)
+// PeekUnread returns reports past `cursor` without advancing it.
+func PeekUnread(fleetID string, cursor CursorName) ([]Report, error) {
+	pos, err := readCursor(fleetID, cursor)
 	if err != nil {
 		return nil, err
 	}
-	reports, _, err := readFromTracked(fleetID, cursor)
+	reports, _, err := readFromTracked(fleetID, pos)
 	return reports, err
 }
 
-// AdvanceCursor pushes the cursor to the current end-of-inbox without
-// returning records. The architect uses this when it has decided to
-// ignore everything pending.
-func AdvanceCursor(fleetID string) error {
+// AdvanceCursor pushes `cursor` to the current end-of-inbox without
+// returning records.
+func AdvanceCursor(fleetID string, cursor CursorName) error {
 	path := filepath.Join(FleetDir(fleetID), "inbox.jsonl")
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return writeCursor(fleetID, 0)
+			return writeCursor(fleetID, cursor, 0)
 		}
 		return err
 	}
-	return writeCursor(fleetID, info.Size())
+	return writeCursor(fleetID, cursor, info.Size())
 }
 
 // readFrom returns reports from a given byte offset to the end of the
@@ -195,11 +209,23 @@ func readFromTracked(fleetID string, offset int64) ([]Report, int64, error) {
 	return reports, pos, nil
 }
 
-func readCursor(fleetID string) (int64, error) {
-	path := filepath.Join(FleetDir(fleetID), "cursor")
+func readCursor(fleetID string, cursor CursorName) (int64, error) {
+	path := filepath.Join(FleetDir(fleetID), string(cursor))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			// Migration: prior versions stored a single cursor at
+			// "cursor". If a legacy file exists, honor it once for
+			// the architect cursor (the one the old code was
+			// effectively using).
+			if cursor == CursorArchitect {
+				legacy := filepath.Join(FleetDir(fleetID), "cursor")
+				if data, err := os.ReadFile(legacy); err == nil {
+					if n, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err == nil && n >= 0 {
+						return n, nil
+					}
+				}
+			}
 			return 0, nil
 		}
 		return 0, err
@@ -214,11 +240,11 @@ func readCursor(fleetID string) (int64, error) {
 	return n, nil
 }
 
-func writeCursor(fleetID string, pos int64) error {
+func writeCursor(fleetID string, cursor CursorName, pos int64) error {
 	if _, err := EnsureFleetDir(fleetID); err != nil {
 		return err
 	}
-	path := filepath.Join(FleetDir(fleetID), "cursor")
+	path := filepath.Join(FleetDir(fleetID), string(cursor))
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, []byte(strconv.FormatInt(pos, 10)+"\n"), 0o600); err != nil {
 		return err

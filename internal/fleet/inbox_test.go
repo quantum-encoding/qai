@@ -53,7 +53,7 @@ func TestReadUnreadAdvancesCursor(t *testing.T) {
 		AppendReport(Report{FleetID: "f2", Pane: "w", Status: "info", Message: string(rune('0' + i))})
 	}
 
-	first, err := ReadUnread("f2")
+	first, err := ReadUnread("f2", CursorArchitect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestReadUnreadAdvancesCursor(t *testing.T) {
 		t.Fatalf("first read: want 3, got %d", len(first))
 	}
 
-	second, err := ReadUnread("f2")
+	second, err := ReadUnread("f2", CursorArchitect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestReadUnreadAdvancesCursor(t *testing.T) {
 	}
 
 	AppendReport(Report{FleetID: "f2", Pane: "w", Status: "info", Message: "fresh"})
-	third, err := ReadUnread("f2")
+	third, err := ReadUnread("f2", CursorArchitect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,11 +85,11 @@ func TestPeekUnreadDoesNotAdvance(t *testing.T) {
 
 	AppendReport(Report{FleetID: "f3", Pane: "w", Status: "done", Message: "x"})
 
-	a, err := PeekUnread("f3")
+	a, err := PeekUnread("f3", CursorArchitect)
 	if err != nil || len(a) != 1 {
 		t.Fatalf("first peek: %v %+v", err, a)
 	}
-	b, err := PeekUnread("f3")
+	b, err := PeekUnread("f3", CursorArchitect)
 	if err != nil || len(b) != 1 {
 		t.Fatalf("second peek should still see the same record: %v %+v", err, b)
 	}
@@ -133,7 +133,7 @@ func TestAdvanceCursorMissingFile(t *testing.T) {
 	cleanup := inboxIsolation(t, "f5")
 	defer cleanup()
 	// No inbox file yet — should not error.
-	if err := AdvanceCursor("f5"); err != nil {
+	if err := AdvanceCursor("f5", CursorArchitect); err != nil {
 		t.Fatalf("AdvanceCursor on missing inbox: %v", err)
 	}
 }

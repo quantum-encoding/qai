@@ -287,6 +287,109 @@ func auditLog(entry auditEntry) {
 	f.Write(append(line, '\n'))
 }
 
+// ─── batch pre-flight ─────────────────────────────────────────────────────
+
+// preflightScrape classifies every URL in a batch before any navigation
+// happens. Refuses the whole run if any URL is hard-denied; for sensitive
+// URLs it asks once for the batch (or accepts --yes / refuses
+// non-interactive). On success, sets yesFlag for the rest of the process
+// so the per-URL gate inside the scrape loop doesn't re-prompt.
+func preflightScrape(entries []scrapeEntry) error {
+	var denied, sensitive []string
+	for _, e := range entries {
+		if d, reason := checkDomainDenied(e.URL); d {
+			denied = append(denied, fmt.Sprintf("%s (%s)", e.URL, reason))
+			auditLog(auditEntry{
+				Command: "scrape:preflight",
+				Domain:  extractHost(e.URL),
+				Args:    strutil.TruncateStr(e.URL, 500),
+				Allowed: false,
+				Reason:  reason,
+			})
+			continue
+		}
+		if checkDomainSensitivity(e.URL) {
+			sensitive = append(sensitive, e.URL)
+		}
+	}
+
+	// Hard refusal — no override. Caller exits.
+	if len(denied) > 0 {
+		fmt.Fprintf(os.Stderr, "qai browser scrape: batch refused — %d denied URL(s) in CSV:\n", len(denied))
+		shown := denied
+		if len(shown) > 10 {
+			shown = shown[:10]
+		}
+		for _, d := range shown {
+			fmt.Fprintf(os.Stderr, "  ✗ %s\n", d)
+		}
+		if len(denied) > 10 {
+			fmt.Fprintf(os.Stderr, "  ... and %d more\n", len(denied)-10)
+		}
+		return fmt.Errorf("denied URLs in batch")
+	}
+
+	// Sensitive — single batch confirmation.
+	if len(sensitive) > 0 {
+		fmt.Fprintf(os.Stderr, "qai browser scrape: %d of %d URL(s) are on sensitive domains:\n",
+			len(sensitive), len(entries))
+		shown := sensitive
+		if len(shown) > 10 {
+			shown = shown[:10]
+		}
+		for _, s := range shown {
+			fmt.Fprintf(os.Stderr, "  ⚠ %s\n", s)
+		}
+		if len(sensitive) > 10 {
+			fmt.Fprintf(os.Stderr, "  ... and %d more\n", len(sensitive)-10)
+		}
+
+		if yesFlag {
+			fmt.Fprintln(os.Stderr, "(--yes set — proceeding)")
+			auditLog(auditEntry{
+				Command: "scrape:preflight",
+				Args:    fmt.Sprintf("sensitive=%d total=%d", len(sensitive), len(entries)),
+				Allowed: true,
+				Reason:  "auto_approved_yes_flag",
+			})
+			return nil
+		}
+		fi, err := os.Stdin.Stat()
+		if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+			auditLog(auditEntry{
+				Command: "scrape:preflight",
+				Args:    fmt.Sprintf("sensitive=%d total=%d", len(sensitive), len(entries)),
+				Allowed: false,
+				Reason:  "non_interactive_no_yes",
+			})
+			return fmt.Errorf("non-interactive run with sensitive URLs — pass --yes to override")
+		}
+		fmt.Fprint(os.Stderr, "\nProceed with batch? [y/N]: ")
+		var resp string
+		fmt.Scanln(&resp)
+		if strings.ToLower(strings.TrimSpace(resp)) != "y" {
+			auditLog(auditEntry{
+				Command: "scrape:preflight",
+				Args:    fmt.Sprintf("sensitive=%d total=%d", len(sensitive), len(entries)),
+				Allowed: false,
+				Reason:  "user_denied",
+			})
+			return fmt.Errorf("user declined batch")
+		}
+		// User approved the whole batch — promote to yesFlag so the
+		// per-URL gate inside the loop doesn't re-prompt for each
+		// sensitive entry. Denied tier is unaffected (no override there).
+		SetYesFlag(true)
+		auditLog(auditEntry{
+			Command: "scrape:preflight",
+			Args:    fmt.Sprintf("sensitive=%d total=%d", len(sensitive), len(entries)),
+			Allowed: true,
+			Reason:  "user_approved_batch",
+		})
+	}
+	return nil
+}
+
 // ─── orchestrator ─────────────────────────────────────────────────────────
 
 // securityGate runs all four layers. Called from every browser command.

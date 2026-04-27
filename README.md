@@ -286,9 +286,10 @@ Layered defence against prompt-injection attacks that try to drive an authentica
 | **Domain sensitivity** | Flag sensitive domains for confirmation. | ~30 builtins: AWS/GCP/Azure consoles, `*.github.com`, banks, `*.stripe.com`, `*.1password.com`, `*.okta.com`, `mail.google.com` |
 | **TTY confirmation** | Require human `[y/N]` approval on sensitive domains; non-interactive runs are denied unless `--yes` is passed. | Piped/automated input without `--yes` is denied by default |
 | **List redaction** | `qai browser list` hides URL+title of denied/sensitive tabs unless `--yes` is passed. | Stops an agent enumerating "what banking site is the user on" |
+| **Batch pre-flight** | `qai browser scrape <csv>` walks every URL through deny/sensitive checks **before** the CDP connection opens. Any denied URL → whole batch refused. Sensitive URLs → single batch confirmation, not N prompts mid-run. | A poisoned CSV with `https://vault.internal.mycompany.com/...` at row 50 fails at row 0 |
 | **Audit log** | JSONL trail of every command at `~/.qai/browser-audit.log`. | Logged regardless of allow/deny, with reason code |
 
-Gated actions: `open`, `extract`, `screenshot`, `click`, `type`, `eval`, `wait`, `source`, `pdf`, `clip`, `tab`. `list` always runs (with redaction). `launch` is local-only and not gated.
+Gated actions: `open`, `extract`, `screenshot`, `click`, `type`, `eval`, `wait`, `source`, `pdf`, `clip`, `tab`, `scrape`. `list` always runs (with redaction). `launch` is local-only and not gated.
 
 The `--yes` flag is parsed as a real flag (not a substring of `os.Args`), so a quoted prompt that happens to contain the literal characters `--yes` cannot bypass confirmation.
 

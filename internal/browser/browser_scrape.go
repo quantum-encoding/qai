@@ -117,6 +117,14 @@ Options:
 		os.Exit(1)
 	}
 
+	// Pre-flight security check — runs BEFORE connecting to the browser
+	// so a poisoned CSV (denied domain at row N) refuses the whole batch
+	// rather than discovering it mid-run after dozens of navigations.
+	if err := preflightScrape(entries); err != nil {
+		fmt.Fprintf(os.Stderr, "qai browser scrape: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Output directory
 	if outputDir == "" {
 		modeStr := "text"

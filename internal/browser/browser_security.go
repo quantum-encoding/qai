@@ -32,6 +32,7 @@ import (
 // browserPolicy is loaded from ~/.qai/browser-policy.yaml.
 type browserPolicy struct {
 	SensitiveDomains []string `yaml:"sensitive_domains"`
+	DeniedDomains    []string `yaml:"denied_domains"`
 	BlockedPatterns  []string `yaml:"blocked_patterns"`
 	TrustedDomains   []string `yaml:"trusted_domains"`
 	StrictMode       bool     `yaml:"strict_mode"`
@@ -114,9 +115,31 @@ var builtinSensitiveDomains = []string{
 	"outlook.office365.com",
 }
 
+// builtinDeniedSchemes are URL prefixes that are always denied — internal
+// browser surfaces (history, settings, extensions) and local-file reads
+// have no business being driven from a CLI under any policy.
+var builtinDeniedSchemes = []string{
+	"chrome://",
+	"chrome-extension://",
+	"edge://",
+	"about:",
+	"devtools://",
+	"file://",
+	"view-source:",
+}
+
 var loadedPolicy browserPolicy
 var compiledSensitive []string
 var compiledTrusted []string
+var compiledDenied []string
+
+// yesFlag is set once by CmdBrowser after parsing --yes/-y. Replaces the
+// previous os.Args substring scan, which could be tripped by a quoted
+// prompt containing the literal characters --yes.
+var yesFlag bool
+
+// SetYesFlag is called from CmdBrowser before dispatch.
+func SetYesFlag(v bool) { yesFlag = v }
 
 // ─── init ─────────────────────────────────────────────────────────────────
 
@@ -141,6 +164,7 @@ func init() {
 	// Merge sensitive domains
 	compiledSensitive = append(builtinSensitiveDomains, loadedPolicy.SensitiveDomains...)
 	compiledTrusted = loadedPolicy.TrustedDomains
+	compiledDenied = loadedPolicy.DeniedDomains
 }
 
 // ─── Layer 1: pattern block ───────────────────────────────────────────────
@@ -154,7 +178,31 @@ func checkEvalSafety(expr string) error {
 	return nil
 }
 
-// ─── Layer 2: domain sensitivity ──────────────────────────────────────────
+// ─── Layer 2a: hard deny (no override, no TTY prompt) ─────────────────────
+
+// checkDomainDenied returns (denied, reason) for a URL. Hits before
+// sensitivity. Internal browser schemes (chrome://, file://, etc.) and
+// any pattern in policy.denied_domains land here. --yes does not bypass.
+func checkDomainDenied(rawURL string) (bool, string) {
+	low := strings.ToLower(rawURL)
+	for _, scheme := range builtinDeniedSchemes {
+		if strings.HasPrefix(low, scheme) {
+			return true, "scheme_denied:" + strings.TrimSuffix(scheme, "://")
+		}
+	}
+	host := extractHost(rawURL)
+	if host == "" {
+		return false, ""
+	}
+	for _, pattern := range compiledDenied {
+		if domainMatches(host, pattern) {
+			return true, "domain_denied:" + pattern
+		}
+	}
+	return false, ""
+}
+
+// ─── Layer 2b: domain sensitivity (TTY confirm tier) ──────────────────────
 
 func checkDomainSensitivity(rawURL string) bool {
 	host := extractHost(rawURL)
@@ -203,11 +251,10 @@ func domainMatches(host, pattern string) bool {
 // ─── Layer 3: TTY confirmation ────────────────────────────────────────────
 
 func confirmAction(action, domain string) bool {
-	// Check for --yes flag (trusted automation bypass)
-	for _, a := range os.Args {
-		if a == "--yes" || a == "-y" {
-			return true
-		}
+	// Trusted-automation bypass — set by CmdBrowser after real flag parse,
+	// not from os.Args (a quoted prompt containing "--yes" must not bypass).
+	if yesFlag {
+		return true
 	}
 
 	// Must be a TTY
@@ -263,7 +310,17 @@ func securityGate(action string, tab *cdpTab, detail string) error {
 		}
 	}
 
-	// Layer 2+3: Domain sensitivity → TTY confirmation
+	// Layer 2a: Hard deny — no override, no prompt. Internal browser
+	// surfaces and policy denied_domains land here. --yes is irrelevant.
+	if denied, reason := checkDomainDenied(tab.URL); denied {
+		entry.Allowed = false
+		entry.Reason = reason
+		auditLog(entry)
+		fmt.Fprintf(os.Stderr, "qai browser: denied %s on %s (%s)\n", action, tab.URL, reason)
+		return fmt.Errorf("denied: %s on %s (%s)", action, tab.URL, reason)
+	}
+
+	// Layer 2b+3: Domain sensitivity → TTY confirmation
 	if checkDomainSensitivity(tab.URL) {
 		if !confirmAction(action, domain) {
 			entry.Allowed = false
@@ -272,11 +329,10 @@ func securityGate(action string, tab *cdpTab, detail string) error {
 			fmt.Fprintf(os.Stderr, "qai browser: denied %s on sensitive domain %s\n", action, domain)
 			return fmt.Errorf("denied: %s on sensitive domain %s", action, domain)
 		}
-		entry.Reason = "user_approved"
-		for _, a := range os.Args {
-			if a == "--yes" || a == "-y" {
-				entry.Reason = "auto_approved_yes_flag"
-			}
+		if yesFlag {
+			entry.Reason = "auto_approved_yes_flag"
+		} else {
+			entry.Reason = "user_approved"
 		}
 	} else {
 		entry.Reason = "domain_allowed"

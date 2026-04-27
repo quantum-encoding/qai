@@ -227,6 +227,25 @@ func CmdBrowser(args []string) {
 		os.Exit(1)
 	}
 
+	// Real-flag parse for --yes/-y. Matters because the previous
+	// os.Args substring scan tripped on quoted prompts containing those
+	// characters. Strip the flag from args before dispatch so individual
+	// command handlers don't see it.
+	cleaned := args[:0:len(args)]
+	for _, a := range args {
+		if a == "--yes" || a == "-y" {
+			SetYesFlag(true)
+			continue
+		}
+		cleaned = append(cleaned, a)
+	}
+	args = cleaned
+
+	if len(args) == 0 {
+		browserUsage()
+		os.Exit(1)
+	}
+
 	action := args[0]
 	rest := args[1:]
 
@@ -384,14 +403,36 @@ func browserList(args []string) {
 		os.Exit(1)
 	}
 
-	auditLog(auditEntry{Command: "list", Allowed: true, Reason: "audit_only"})
-
 	jsonMode := false
 	for _, a := range args {
 		if a == "--json" {
 			jsonMode = true
 		}
 	}
+
+	// Privacy filter: redact denied tabs entirely; redact sensitive tabs'
+	// title+URL unless --yes is set (caller has explicitly accepted the
+	// disclosure for this invocation). Audit-log the redaction counts.
+	denied, sensitive := 0, 0
+	for i := range tabs {
+		if d, _ := checkDomainDenied(tabs[i].URL); d {
+			tabs[i].Title = "[denied]"
+			tabs[i].URL = "[denied]"
+			denied++
+			continue
+		}
+		if checkDomainSensitivity(tabs[i].URL) && !yesFlag {
+			tabs[i].Title = "[sensitive]"
+			tabs[i].URL = "[sensitive]"
+			sensitive++
+		}
+	}
+
+	reason := "audit_only"
+	if denied > 0 || sensitive > 0 {
+		reason = fmt.Sprintf("redacted denied=%d sensitive=%d", denied, sensitive)
+	}
+	auditLog(auditEntry{Command: "list", Allowed: true, Reason: reason})
 
 	if jsonMode {
 		enc := json.NewEncoder(os.Stdout)
@@ -409,6 +450,9 @@ func browserList(args []string) {
 			title = title[:57] + "..."
 		}
 		fmt.Printf("%-12s %-60s %s\n", t.ID[:12], title, t.URL)
+	}
+	if sensitive > 0 || denied > 0 {
+		fmt.Fprintf(os.Stderr, "(%d denied, %d sensitive entries redacted — re-run with --yes to reveal sensitive)\n", denied, sensitive)
 	}
 }
 
@@ -487,6 +531,13 @@ func browserTab(args []string) {
 	}
 	for _, t := range tabs {
 		if t.ID == tabID || strings.HasPrefix(t.ID, tabID) {
+			// Gate on the target tab's URL — switching focus to a
+			// banking/SSO/internal-page tab is itself a privacy event,
+			// and lets the next command operate on a sensitive surface.
+			target := t
+			if err := securityGate("tab", &target, target.URL); err != nil {
+				os.Exit(1)
+			}
 			if err := cdpActivateTab(port, t.ID); err != nil {
 				fmt.Fprintf(os.Stderr, "qai browser: %v\n", err)
 				os.Exit(1)

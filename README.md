@@ -277,32 +277,43 @@ Global flags: `--port <n>` (default 9222 or `QAI_BROWSER_PORT`), `--tab <id>`, `
 
 #### Security Perimeter
 
-Four-layer defense against prompt injection attacks that try to exfiltrate data from authenticated browser sessions:
+Layered defence against prompt-injection attacks that try to drive an authenticated browser session against the user's interests:
 
 | Layer | Protection | Example |
 |-------|-----------|---------|
-| **Pattern block** | Hard-deny dangerous JS before it reaches the browser | `document.cookie`, `localStorage`, `fetch(`, `eval(`, `XMLHttpRequest`, `sendBeacon` |
-| **Domain protection** | Flag sensitive domains (AWS, GitHub, banking, SSO, cloud consoles) | `console.aws.amazon.com`, `github.com`, `dash.cloudflare.com` |
-| **TTY confirmation** | Require human `[y/N]` approval on sensitive domains; deny when non-interactive | Piped/automated input is denied by default |
-| **Audit log** | JSONL trail of every command at `~/.qai/browser-audit.log` | Logged regardless of allow/deny |
+| **Pattern block** | Hard-deny dangerous JS before it reaches the browser. Eval-only. No override. | `document.cookie`, `localStorage`, `fetch(`, `eval(`, `XMLHttpRequest`, `sendBeacon`, `chrome.runtime`, `ServiceWorker` |
+| **Hard deny** | Refuse the action outright — no TTY prompt, no `--yes` override. | Builtin: `chrome://`, `chrome-extension://`, `edge://`, `about:`, `devtools://`, `file://`, `view-source:`. Plus user `denied_domains` list. |
+| **Domain sensitivity** | Flag sensitive domains for confirmation. | ~30 builtins: AWS/GCP/Azure consoles, `*.github.com`, banks, `*.stripe.com`, `*.1password.com`, `*.okta.com`, `mail.google.com` |
+| **TTY confirmation** | Require human `[y/N]` approval on sensitive domains; non-interactive runs are denied unless `--yes` is passed. | Piped/automated input without `--yes` is denied by default |
+| **List redaction** | `qai browser list` hides URL+title of denied/sensitive tabs unless `--yes` is passed. | Stops an agent enumerating "what banking site is the user on" |
+| **Audit log** | JSONL trail of every command at `~/.qai/browser-audit.log`. | Logged regardless of allow/deny, with reason code |
 
-User-configurable via `~/.qai/browser-policy.yaml`:
+Gated actions: `open`, `extract`, `screenshot`, `click`, `type`, `eval`, `wait`, `source`, `pdf`, `clip`, `tab`. `list` always runs (with redaction). `launch` is local-only and not gated.
+
+The `--yes` flag is parsed as a real flag (not a substring of `os.Args`), so a quoted prompt that happens to contain the literal characters `--yes` cannot bypass confirmation.
+
+User-configurable via `~/.qai/browser-policy.yaml` (a fully commented template ships at `internal/browser/browser-policy.example.yaml`):
 
 ```yaml
-# Add your org's sensitive domains
+# Hard deny — no TTY prompt, no --yes override.
+denied_domains:
+  - "vault.internal.mycompany.com"
+  - "admin.mycompany.com"
+
+# Sensitive — TTY confirm or --yes.
 sensitive_domains:
   - "*.internal.mycompany.com"
   - "grafana.mycompany.com"
 
-# Additional blocked eval patterns (regex)
-blocked_patterns:
-  - "internalAPI\\.secret"
-
-# Domains that skip confirmation
+# Bypass sensitivity (does NOT bypass denied_domains).
 trusted_domains:
   - "localhost"
 
-# Require confirmation for ALL domains
+# Extra eval deny patterns (regex, case-insensitive).
+blocked_patterns:
+  - "internalAPI\\.secret"
+
+# When true, everything not trusted is sensitive.
 strict_mode: false
 ```
 

@@ -1,0 +1,44 @@
+# browser-policy.example.yaml — copy to ~/.qai/browser-policy.yaml
+#
+# Layered defence for `qai browser` against prompt-injection / agent
+# misuse on an authenticated browser session. All four lists merge with
+# the builtin defaults (they extend, they do not replace).
+
+# Hard-deny tier — no TTY prompt, no --yes override, just refuse + audit.
+# Use for surfaces that should never be reached from automation:
+# internal admin panels, your password manager, anything with destructive
+# one-click actions. Builtin denies (always on): chrome://, chrome-extension://,
+# edge://, about:, devtools://, file://, view-source: — these expose history,
+# settings, extensions, and local-file reads.
+denied_domains:
+  # - "vault.internal.mycompany.com"
+  # - "admin.mycompany.com"
+  # - "*.intra.mycompany.com"
+
+# Sensitive tier — TTY confirm required; non-interactive run is denied
+# unless --yes is passed. Adds to the ~30 builtin patterns (banks, cloud
+# consoles, SSO, password managers, code hosts, payment processors,
+# webmail, crypto exchanges).
+sensitive_domains:
+  # - "*.internal.mycompany.com"
+  # - "grafana.mycompany.com"
+  # - "metrics.mycompany.com"
+
+# Trusted tier — bypass sensitivity check. Useful for localhost dev work
+# and your own staging hosts. Does NOT bypass denied_domains.
+trusted_domains:
+  # - "localhost"
+  # - "127.0.0.1"
+  # - "*.lvh.me"
+
+# Layer 1: extra deny patterns for `qai browser eval`, regex (case-insensitive).
+# Builtin patterns block the obvious cookie/storage/network exfil vectors;
+# this list is for org-specific tokens or APIs you never want eval'd.
+blocked_patterns:
+  # - "internalAPI\\.secret"
+  # - "window\\.__corpAuth"
+
+# Strict mode: when true, every domain not in trusted_domains is
+# treated as sensitive (requires confirm or --yes). Useful for paranoid
+# sessions or for sandboxing an unattended agent.
+strict_mode: false

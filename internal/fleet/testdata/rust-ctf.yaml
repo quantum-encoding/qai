@@ -1,0 +1,186 @@
+# rust-ctf.yaml — 15-agent red-team mission across recent Rust programs.
+
+version: 1
+
+defaults:
+  startup_timeout: 45s
+  reporting:
+    enabled: true
+
+panes:
+  - name: eye-of-metatron
+    cwd: /Users/director/work/rust_programs/eye-of-metatron
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of eye-of-metatron. My code, authorized.
+      Steps: (1) read enough source to understand what it is + threat model;
+      (2) qai security . for static pass; (3) manually audit unsafe blocks,
+      integer overflow on attacker sizes (release wraps in Rust if -C
+      overflow-checks=off), Command::new injection, path TOCTOU + missing
+      O_NOFOLLOW, deserialization (serde untrusted), JWT/auth/TLS, panic-
+      on-input (unwrap/expect on parsed data), log injection, SSRF in
+      reqwest, secrets in logs/argv/env. (4) Write findings.md at project
+      root with severity (crit/high/med/low/info), file:line, description,
+      exploit sketch, fix. (5) If git repo, commit findings.md. Be terse,
+      exploit-flavored, no fluff. Then exit.
+
+  - name: secret_cli
+    cwd: /Users/director/work/rust_programs/secret_cli
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of secret_cli. My code, authorized.
+      Same scope as the standard Rust threat list (unsafe, overflow,
+      Command::new, path TOCTOU, deserialization, JWT, panic-on-input,
+      log/SSRF, secrets in logs/argv/env). Pay extra attention to how
+      secrets are stored and accessed (this is a secrets-handling tool).
+      qai security . then manual deep-read of entry + secret access path.
+      Write findings.md, commit if git. Terse, exploit-flavored. Exit.
+
+  - name: ai-trash
+    cwd: /Users/director/work/rust_programs/ai-trash
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of ai-trash. My code, authorized.
+      Standard Rust scope (unsafe / overflow / Command::new / path
+      TOCTOU / deserialization / JWT / panic / log injection / SSRF /
+      secrets). Filesystem-deletion code paths are extra interesting —
+      symlink-following, race with the trashed file, escape outside the
+      trash dir. qai security . + manual audit, write findings.md,
+      commit if git. Terse, exploit-flavored. Exit.
+
+  - name: axiom-pdf-warship
+    cwd: /Users/director/work/rust_programs/axiom-pdf-warship
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of axiom-pdf-warship. My code,
+      authorized. Standard Rust scope plus PDF-specific: integer overflow
+      on object/xref/stream lengths, escape rules in /URI annotations,
+      embedded JS actions, font/image embedding with attacker bytes,
+      recursive object refs (stack overflow). qai security . + manual.
+      Write findings.md, commit if git. Terse. Exit.
+
+  - name: quantum-curl-rs
+    cwd: /Users/director/work/rust_programs/quantum-curl-rs
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of quantum-curl-rs. My code,
+      authorized. Standard Rust scope plus HTTP-client: SSRF (cloud
+      metadata via 169.254.169.254 / decimal / hex / IPv4-mapped v6 /
+      DNS rebinding / 30x redirect to private IP), header injection
+      (CR/LF in user-controlled headers), bearer-token leak via URL
+      query, request smuggling, regex DoS, TLS verification disabled.
+      qai security . + manual. findings.md, commit if git. Terse. Exit.
+
+  - name: arena_log_tree
+    cwd: /Users/director/work/rust_programs/arena_log_tree
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of arena_log_tree. My code,
+      authorized. Arena allocators are a juicy target — UAF across
+      arena resets, lifetime escapes from arena-bound refs, integer
+      overflow on offset math, alignment errors in @ptr-cast equivalent
+      (transmute / from_raw_parts), out-of-bounds reads on attacker-
+      sized indices. Plus standard Rust scope. qai security . + manual.
+      findings.md, commit if git. Terse. Exit.
+
+  - name: rust_tokenizer
+    cwd: /Users/director/work/rust_programs/rust_tokenizer
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of rust_tokenizer. My code,
+      authorized. Tokenizer angle: integer overflow on token offsets/
+      lengths, OOM via attacker-shaped input (deeply nested / huge
+      token), panic on malformed input (unwrap on parser results),
+      lifetime issues with token slices outliving source. Plus standard
+      Rust scope. qai security . + manual. findings.md, commit if git.
+      Terse. Exit.
+
+  - name: media_cli
+    cwd: /Users/director/work/rust_programs/media_cli
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of media_cli. My code, authorized.
+      Standard Rust scope plus media-specific: file format parsing
+      (PNG/JPEG/MP4 chunk lengths trusted?), Command::new shelling out
+      to ffmpeg with user paths/filters, output path traversal, integer
+      overflow on width/height/duration, OOM via attacker-shaped media.
+      qai security . + manual. findings.md, commit if git. Terse. Exit.
+
+  - name: rust_sinewave
+    cwd: /Users/director/work/rust_programs/rust_sinewave
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of rust_sinewave. My code,
+      authorized. Audio gen angle: integer overflow on sample count /
+      buffer size / frequency math, output file path TOCTOU, attacker-
+      controlled WAV header fields (sample rate / channels / bit depth
+      affecting buffer sizes). Plus standard Rust scope. qai security .
+      + manual. findings.md, commit if git. Terse. Exit.
+
+  - name: dag-cli
+    cwd: /Users/director/work/rust_programs/dag-cli
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of dag-cli. My code, authorized.
+      DAG / graph angle: cycle detection failures (infinite loop on
+      attacker-crafted graph), node-id collision, path-finding integer
+      overflow on edge weights, deserialization of attacker DAG (type
+      confusion, billion-edge DoS). Plus standard Rust scope. qai
+      security . + manual. findings.md, commit if git. Terse. Exit.
+
+  - name: rust-security
+    cwd: /Users/director/work/rust_programs/rust-security
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of rust-security. My code,
+      authorized. This IS a security tool — extra scrutiny: false-
+      negatives in detection (regex bypasses, encoding tricks),
+      privilege handling, audit log integrity, bypass via attacker-
+      shaped input that triggers parse error before scan. Standard
+      Rust scope on top. qai security . + manual. findings.md,
+      commit if git. Terse. Exit.
+
+  - name: high-frequency-message-broker
+    cwd: /Users/director/work/rust_programs/high-frequency-message-broker
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of high-frequency-message-broker.
+      My code, authorized. Broker angle: message size limits, queue
+      overflow / backpressure (drop policy attackable?), auth on pub/
+      sub topics, slow-consumer DoS, replay attack on persisted messages,
+      integer overflow on offset/sequence math. Plus standard Rust scope.
+      qai security . + manual. findings.md, commit if git. Terse. Exit.
+
+  - name: video-compression-service
+    cwd: /Users/director/work/rust_programs/video-compression-service
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of video-compression-service.
+      My code, authorized. Service angle: route auth, file upload
+      paths (mime sniff, double-extension, traversal), Command::new
+      shelling to ffmpeg with user input, output path traversal,
+      compression bombs (input that expands hugely), DoS via slow
+      stream / large file. Plus standard Rust scope. qai security .
+      + manual. findings.md, commit if git. Terse. Exit.
+
+  - name: codebase-navigator-v2
+    cwd: /Users/director/work/rust_programs/codebase-navigator-v2
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of codebase-navigator-v2. My code,
+      authorized. Navigator angle: path traversal in repo paths, ignored
+      gitignore allowing secret leak, symlink escape from repo root,
+      Command::new git invocations with user-influenced flags. Plus
+      standard Rust scope. qai security . + manual. findings.md,
+      commit if git. Terse. Exit.
+
+  - name: pixel-restore-timeline
+    cwd: /Users/director/work/rust_programs/pixel-restore-timeline
+    agent: { kind: fresh, cmd: claude, args: ["--permission-mode", "auto"] }
+    prompt: |
+      CTF mode — Rust red-team audit of pixel-restore-timeline. My code,
+      authorized. Timeline / restore angle: integer overflow on frame
+      counts / pixel offsets, rollback file path TOCTOU, attacker-
+      controlled snapshot files (deserialization), partial-write
+      durability (truncated state). Plus standard Rust scope. qai
+      security . + manual. findings.md, commit if git. Terse. Exit.

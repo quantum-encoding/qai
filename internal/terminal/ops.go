@@ -55,9 +55,31 @@ type SpawnOpts struct {
 
 // ─── operations ───────────────────────────────────────────────────────────
 
+// SpawnNoTile is Spawn without the per-spawn `select-layout tiled`
+// rebalance. The fleet runner uses this when bringing up many panes in
+// rapid succession — repeated retiling races tmux's split-window and
+// causes spurious "exit status 1" failures past ~8 panes. Use Spawn
+// (with retile) for one-off interactive spawns; SpawnNoTile + a single
+// RetileSession at the end for batch.
+func SpawnNoTile(opts SpawnOpts) (string, error) {
+	return spawnInternal(opts, false)
+}
+
+// RetileSession runs `select-layout tiled` on the qai session. Best
+// called once after a batch of SpawnNoTile calls.
+func RetileSession() error {
+	ensureSession()
+	_, err := tmuxRun("select-layout", "-t", tmuxSession(), "tiled")
+	return err
+}
+
 // Spawn creates a new pane in the qai-managed tmux session and returns its
 // pane id (e.g. "%4"). Idempotent on session creation.
 func Spawn(opts SpawnOpts) (string, error) {
+	return spawnInternal(opts, true)
+}
+
+func spawnInternal(opts SpawnOpts, retile bool) (string, error) {
 	if opts.Name == "" {
 		return "", fmt.Errorf("spawn: name is required")
 	}
@@ -81,7 +103,9 @@ func Spawn(opts SpawnOpts) (string, error) {
 	paneID = strings.TrimSpace(paneID)
 
 	tmuxRun("select-pane", "-t", paneID, "-T", opts.Name)
-	tmuxRun("select-layout", "-t", session, "tiled")
+	if retile {
+		tmuxRun("select-layout", "-t", session, "tiled")
+	}
 
 	switch {
 	case opts.Cmd != "":

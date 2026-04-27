@@ -19,7 +19,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -51,37 +50,102 @@ func Up(ctx context.Context, spec *Spec) (string, error) {
 		return "", err
 	}
 
-	// Per-pane name → tmux-pane-id mapping. Claude Code rewrites the
-	// pane title to "Claude Code" once it takes over, so we cannot
-	// look panes up by manifest name after spawn — every later
-	// operation (status, snapshot, send, close) addresses the pane id.
-	var (
-		mu    sync.Mutex
-		panes = make(map[string]string, len(spec.Panes))
-	)
-
-	g, gctx := errgroup.WithContext(ctx)
-	for _, pane := range spec.Panes {
-		pane := pane
-		g.Go(func() error {
-			paneID, err := spawnAndPrompt(gctx, spec, pane, fleetID)
-			if err != nil {
-				return err
-			}
-			mu.Lock()
-			panes[pane.Name] = paneID
-			mu.Unlock()
-			return nil
-		})
+	// Two-phase bringup.
+	//
+	// Phase 1 — SERIAL spawn. Concurrent split-window races tmux past
+	// ~7-8 panes (split-window picks the active pane to split, and
+	// 15 goroutines all racing on "the active pane" produces "exit
+	// status 1" failures after a handful of splits). Doing them one
+	// at a time, with the per-spawn retile rebalancing in between,
+	// matches the behaviour of running `qai term spawn` 15 times
+	// from a shell — which works.
+	//
+	// Phase 2 — PARALLEL ready+prompt. Once panes exist, waiting on
+	// their REPLs and sending prompts is per-pane and doesn't touch
+	// shared tmux state. Run them concurrently for speed.
+	//
+	// Failure model: a single pane failing to spawn doesn't abort
+	// the rest. Log it and continue — surviving panes still get
+	// prompts and the user can retry the failed ones later.
+	type spawnedPane struct {
+		def    PaneDef
+		paneID string
 	}
-	werr := g.Wait()
-	// Persist whatever we got, even on partial failure — Down should
-	// still be able to clean up panes that did spawn.
+	var spawned []spawnedPane
+	panes := make(map[string]string, len(spec.Panes))
+
+	for _, pane := range spec.Panes {
+		paneID, err := spawnOnly(spec, pane, fleetID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "qai fleet: pane %q failed to spawn: %v (continuing)\n", pane.Name, err)
+			continue
+		}
+		spawned = append(spawned, spawnedPane{pane, paneID})
+		panes[pane.Name] = paneID
+	}
+
+	// Persist mapping before phase 2 so partial state is recoverable.
 	if perr := writePaneMap(fleetID, panes); perr != nil {
 		fmt.Fprintf(os.Stderr, "qai fleet: persist pane map: %v\n", perr)
 	}
-	if werr != nil {
-		return fleetID, werr
+
+	if len(spawned) == 0 {
+		return fleetID, fmt.Errorf("no panes spawned")
+	}
+	if len(spawned) < len(spec.Panes) {
+		fmt.Fprintf(os.Stderr, "qai fleet: %d/%d panes spawned, proceeding with survivors\n",
+			len(spawned), len(spec.Panes))
+	}
+
+	// Phase 2a: parallel wait for each pane's REPL to be ready.
+	// Phase 2b: serial prompt send. The send path uses tmux's GLOBAL
+	// clipboard buffer (load-buffer / paste-buffer) — concurrent
+	// goroutines stomp each other's buffer between the load and the
+	// paste, so most panes receive the wrong prompt or none at all.
+	// Sending one at a time avoids that and looks like a clean wave
+	// of activations on video.
+	type readyPane struct {
+		def     PaneDef
+		paneID  string
+		readyOK bool
+		readyErr error
+	}
+	results := make([]readyPane, len(spawned))
+	g, gctx := errgroup.WithContext(ctx)
+	for i, sp := range spawned {
+		i, sp := i, sp
+		results[i] = readyPane{def: sp.def, paneID: sp.paneID}
+		g.Go(func() error {
+			if err := WaitForPrompt(sp.paneID, matcherFor(AgentClaude), spec.EffectiveStartupTimeout()); err != nil {
+				results[i].readyErr = err
+				return nil // log, don't fail the group
+			}
+			if sp.def.WaitFor != "" {
+				if err := waitForCtx(gctx, sp.def.WaitFor, defaultWaitForTimeout); err != nil {
+					results[i].readyErr = err
+					return nil
+				}
+			}
+			results[i].readyOK = true
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	// Serial prompt-send wave. ~1.5s per pane (paste + 500ms + Enter
+	// + 500ms + Enter), ~22s total for 15 — fine for the demo, and
+	// the cadence reads cleanly on video.
+	for _, r := range results {
+		if !r.readyOK {
+			if r.readyErr != nil {
+				fmt.Fprintf(os.Stderr, "qai fleet: pane %q (%s) not ready: %v\n", r.def.Name, r.paneID, r.readyErr)
+			}
+			continue
+		}
+		prompt := r.def.Prompt + spec.Defaults.Reporting.PromptBlock()
+		if err := terminal.Send(r.paneID, prompt, true); err != nil {
+			fmt.Fprintf(os.Stderr, "qai fleet: pane %q (%s) send: %v\n", r.def.Name, r.paneID, err)
+		}
 	}
 
 	if spec.Defaults.Reporting.Enabled {
@@ -287,7 +351,14 @@ func Snapshot(spec *Spec) ([]terminal.PaneSnapshot, error) {
 
 // ─── implementation ──────────────────────────────────────────────────────
 
-func spawnAndPrompt(ctx context.Context, spec *Spec, pane PaneDef, fleetID string) (string, error) {
+// spawnOnly creates the tmux pane and returns its id. Caller is expected
+// to hold a mutex around this so the tmux server isn't asked to split N
+// times in parallel — past ~8 simultaneous splits, tmux's layout
+// rebalancing races and refuses some.
+//
+// We deliberately skip the per-spawn `select-layout tiled` here; one
+// final retile after all spawns is enough and side-steps the race.
+func spawnOnly(spec *Spec, pane PaneDef, fleetID string) (string, error) {
 	cmd, err := buildCommand(pane)
 	if err != nil {
 		return "", fmt.Errorf("pane %q: build cmd: %v", pane.Name, err)
@@ -306,26 +377,28 @@ func spawnAndPrompt(ctx context.Context, spec *Spec, pane PaneDef, fleetID strin
 	if err != nil {
 		return "", fmt.Errorf("pane %q: spawn: %v", pane.Name, err)
 	}
-
-	// Address the pane by its tmux id from here on. The manifest name
-	// was set as the title at spawn, but Claude Code rewrites the title
-	// once it takes over — name-based lookup would fail.
-	if err := WaitForPrompt(paneID, matcherFor(AgentClaude), spec.EffectiveStartupTimeout()); err != nil {
-		return paneID, fmt.Errorf("pane %q (%s): %v", pane.Name, paneID, err)
-	}
-
-	if pane.WaitFor != "" {
-		if err := waitForCtx(ctx, pane.WaitFor, defaultWaitForTimeout); err != nil {
-			return paneID, fmt.Errorf("pane %q (%s): wait_for %q: %v", pane.Name, paneID, pane.WaitFor, err)
-		}
-	}
-
-	prompt := pane.Prompt + spec.Defaults.Reporting.PromptBlock()
-	if err := terminal.Send(paneID, prompt, true); err != nil {
-		return paneID, fmt.Errorf("pane %q (%s): send: %v", pane.Name, paneID, err)
-	}
 	return paneID, nil
 }
+
+// readyAndPrompt waits for the agent's REPL, optionally waits on a
+// wait_for path, and sends the prompt. Address by paneID — Claude Code
+// rewrites the title once it takes over.
+func readyAndPrompt(ctx context.Context, spec *Spec, pane PaneDef, paneID string) error {
+	if err := WaitForPrompt(paneID, matcherFor(AgentClaude), spec.EffectiveStartupTimeout()); err != nil {
+		return fmt.Errorf("pane %q (%s): %v", pane.Name, paneID, err)
+	}
+	if pane.WaitFor != "" {
+		if err := waitForCtx(ctx, pane.WaitFor, defaultWaitForTimeout); err != nil {
+			return fmt.Errorf("pane %q (%s): wait_for %q: %v", pane.Name, paneID, pane.WaitFor, err)
+		}
+	}
+	prompt := pane.Prompt + spec.Defaults.Reporting.PromptBlock()
+	if err := terminal.Send(paneID, prompt, true); err != nil {
+		return fmt.Errorf("pane %q (%s): send: %v", pane.Name, paneID, err)
+	}
+	return nil
+}
+
 
 // writePaneMap persists the manifest-name → tmux-pane-id mapping for a
 // fleet. Read by Status / Snapshot / Down to address panes by id even

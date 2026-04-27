@@ -21,6 +21,7 @@ import (
 	"github.com/quantum-encoding/qai-cli/internal/conduct"
 	"github.com/quantum-encoding/qai-cli/internal/config"
 	"github.com/quantum-encoding/qai-cli/internal/db"
+	"github.com/quantum-encoding/qai-cli/internal/fleet"
 	"github.com/quantum-encoding/qai-cli/internal/graph"
 	"github.com/quantum-encoding/qai-cli/internal/ingest"
 	"github.com/quantum-encoding/qai-cli/internal/initcmd"
@@ -145,6 +146,12 @@ func main() {
 		agent.CmdAgent(args) // handles its own --help
 	case "term", "terminal", "t":
 		terminal.CmdTerminal(args) // handles its own --help
+	case "fleet":
+		fleet.CmdFleet(args) // handles its own --help
+	case "sessions":
+		fleet.CmdSessions(args) // handles its own --help
+	case "report":
+		fleet.CmdReport(args) // worker-side: post a report to the fleet inbox
 	default:
 		if !tryPlugin(cmd, args) {
 			fmt.Fprintf(os.Stderr, "qai: unknown command %q\n", cmd)

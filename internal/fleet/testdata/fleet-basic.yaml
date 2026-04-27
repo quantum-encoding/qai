@@ -1,0 +1,35 @@
+version: 1
+
+defaults:
+  cwd: /tmp/work
+  startup_timeout: 30s
+
+panes:
+  - name: gs-security-audit
+    cwd: /tmp/work/guardian
+    agent:
+      kind: fresh
+      cmd: claude
+      args: ["--model", "opus-4.7"]
+    prompt: |
+      Audit this Zig codebase for memory safety issues.
+      Write findings to AUDIT_FINDINGS.md.
+
+  - name: chronos-specialist
+    cwd: /tmp/work/chronos
+    agent:
+      kind: resume
+      cmd: claude
+      session: "@chronos_engine"
+    prompt: |
+      Pick up the timestamp serialisation bug. Pull feature/ts-roundtrip
+      and verify the round-trip test passes on the edge cases.
+
+  - name: writer
+    cwd: /tmp/work/project
+    agent:
+      kind: fresh
+      cmd: claude
+    wait_for: /tmp/work/project/facts.json
+    prompt: |
+      Draft article.md from facts.json in our house voice.

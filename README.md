@@ -245,6 +245,86 @@ qai term send redteam "sections 1 and 3 are approved; focus on 2 and 4"
 
 tmux is already the primitive. Session persistence across disconnects, SSH-from-anywhere, keyboard-driven pane navigation, scrollback search, working clipboard, integration with every terminal emulator. A custom agent-supervision GUI reinvents 90% of that badly. If your observability surface can't be attached from an SSH session on a phone, it's a status page, not an observability surface.
 
+### Fleet (declarative parallel agent panes)
+
+`qai fleet` is the next layer up from `qai term`. Where `qai term spawn` is the imperative one-pane-at-a-time primitive, `qai fleet up <manifest.yaml>` brings up an entire fleet of agents from a single declarative file: `N` panes, each with its own working directory, agent kind (fresh or resumed), and prompt. Workers report status into a per-fleet inbox; a notifier daemon nudges the architect's pane when reports land.
+
+```bash
+qai fleet up        <manifest.yaml> [--dry]   # spawn every pane; --dry validates
+qai fleet down      <manifest.yaml>           # tear down + stop notifier
+qai fleet status    <manifest.yaml> [--json]  # alive/dead per pane
+qai fleet snapshot  <manifest.yaml>           # tail every pane's last lines
+qai fleet inbox     [--unread] [--watch] [--json]  # read worker reports
+qai fleet bootstrap                           # print architect prompt protocol
+
+qai sessions list   [--cwd <path>] [--json]   # discover live + historical Claude sessions
+qai report          --status <s> --message m  # called by workers from inside their pane
+```
+
+Manifest schema (v1):
+
+```yaml
+version: 1
+
+defaults:
+  cwd: /Users/me/work
+  startup_timeout: 45s
+  reporting:
+    enabled: true   # auto-injects a "qai report when done/blocked" block
+                    # into every worker's prompt
+
+panes:
+  - name: gs-security-audit
+    cwd: /Users/me/work/guardian
+    agent:
+      kind: fresh                       # cold start
+      cmd: claude
+      args: ["--permission-mode", "auto"]
+    prompt: |
+      Audit this Zig codebase for memory safety issues.
+
+  - name: chronos-specialist
+    cwd: /Users/me/work/chronos_engine
+    agent:
+      kind: resume                      # claude --resume <uuid>
+      cmd: claude
+      session: "@chronos_engine"        # @alias resolves against ~/.claude/
+    prompt: |
+      Pick up where we left off on the timestamp serialisation bug.
+
+  - name: writer
+    cwd: /Users/me/work/article
+    agent: { kind: fresh, cmd: claude }
+    wait_for: /Users/me/work/article/facts.json   # only orchestration primitive
+    prompt: |
+      Draft article.md from facts.json in the house voice.
+```
+
+The two flavours are the load-bearing distinction:
+
+- **Fresh agent** — cold start. Prompt is the entire context. Used for tasks that don't need history: security audits, doc generation, scans, anything throwaway.
+- **Resumed agent** — `claude --resume <session-id>`. The specialist Claude that's already been working in that repo for days, has been corrected, has the taste. Prompt is a nudge ("pick up where we left off"), not a briefing.
+
+`@alias` for resumed sessions is matched against the on-disk Claude session store at `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` — most-recent session whose `cwd` basename matches the alias wins. `qai sessions list --cwd <path>` is the discovery command.
+
+#### Worker → architect reporting
+
+The architect (you, with Claude in the top-left tmux pane) doesn't poll worker output by hand. Workers call `qai report --status <state> --message "<text>"` when they finish or get stuck — `QAI_FLEET_ID` and `QAI_FLEET_PANE` env vars are set by `qai fleet up` so the worker knows which inbox to write to.
+
+A notifier daemon (`qai fleet notifier <id>`, started automatically by `up`) watches `~/.qai/fleet/<id>/inbox.jsonl`, debounces 10s, and fires a single human-voiced nudge into the architect's pane: `[FLEET] check your inbox, N new reports waiting — you have permission`. The architect's prompt protocol (`qai fleet bootstrap | tee -a ~/.claude/CLAUDE.md`) teaches it to drain via `qai fleet inbox --unread --json` and act per-report.
+
+The notifier holds the nudge while the architect's input box is non-empty (you're mid-typing) and resumes once it goes idle, so a worker finishing while you're composing a reply doesn't stomp your input.
+
+Two cursors are tracked independently per fleet: an `architect-cursor` advanced by `qai fleet inbox --unread`, and a `notifier-cursor` advanced by the notifier when it fires a nudge. Reports persist in the inbox file until the architect explicitly drains them; the notifier never consumes records on the architect's behalf.
+
+#### What lands at the end
+
+For a 15-pane mission: 15 `findings.md` (or whatever artefact the prompt asked for) committed in their respective repos, an `~/.qai/fleet/<id>/inbox.jsonl` with every report, and a sequence of `[FLEET]` nudges that gave the architect a single drain-call per batch instead of N polling rounds.
+
+#### Operator workflow guide
+
+For the day-to-day playbook (mental model, common bugs hit during iteration, state-file layout, when to use `qai term` vs `qai fleet`), see [`docs/AGENTS.md`](docs/AGENTS.md).
+
 ### Browser Automation (CDP)
 
 Connects to your existing Chrome/Brave via the DevTools Protocol debug port. No headless browser, no Playwright, no Node.js — uses your real browser session with all cookies, auth, and fingerprints intact.

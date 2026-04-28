@@ -130,6 +130,7 @@ type jsonrpcMessage struct {
 
 func (s *mcpServer) dispatch(msg jsonrpcMessage) {
 	isNotification := len(msg.ID) == 0
+	dlogf("recv method=%s id=%s notif=%v params=%s", msg.Method, string(msg.ID), isNotification, truncate(string(msg.Params), 200))
 	switch msg.Method {
 	case "initialize":
 		s.handleInitialize(msg.ID)
@@ -162,11 +163,16 @@ func (s *mcpServer) handleInitialize(id json.RawMessage) {
 	s.respond(id, map[string]any{
 		"protocolVersion": mcpProtocolVersion,
 		"capabilities": map[string]any{
-			"tools": map[string]any{},
+			// listChanged true so the client knows we can fire
+			// notifications/tools/list_changed (push path C).
+			"tools": map[string]any{"listChanged": true},
 			"resources": map[string]any{
 				"subscribe":   true,
-				"listChanged": false,
+				"listChanged": true,
 			},
+			// Advertise logging so the client knows we'll emit
+			// notifications/message (push path D).
+			"logging": map[string]any{},
 		},
 		"serverInfo": map[string]any{
 			"name":    mcpServerName,
@@ -287,6 +293,7 @@ func (s *mcpServer) handleResourcesSubscribe(id json.RawMessage, raw json.RawMes
 	s.subMu.Lock()
 	s.subscribers[p.URI] = true
 	s.subMu.Unlock()
+	dlogf("SUBSCRIBE uri=%s (client opted into push)", p.URI)
 	s.respond(id, map[string]any{})
 }
 
@@ -301,6 +308,7 @@ func (s *mcpServer) handleResourcesUnsubscribe(id json.RawMessage, raw json.RawM
 	s.subMu.Lock()
 	delete(s.subscribers, p.URI)
 	s.subMu.Unlock()
+	dlogf("UNSUBSCRIBE uri=%s", p.URI)
 	s.respond(id, map[string]any{})
 }
 
@@ -323,6 +331,13 @@ func (s *mcpServer) roleLoop(ctx context.Context) {
 
 // evalRole reads the active-fleet pointer + architect-pane file and
 // updates the watcher state if the role changed.
+//
+// We deliberately do NOT fire a notification on role transition here.
+// (Earlier we did, as a "tell subscribers the resource set shifted"
+// nicety.) Once notifyResourceUpdated grew experimental fallback paths
+// B/C/D for clients that don't subscribe, role-transition firing became
+// a flood of unsolicited messages on startup. The watcher path covers
+// the only case that matters: fire when the inbox file actually changes.
 func (s *mcpServer) evalRole() {
 	fleetID, isArch := detectArchitectRole()
 	s.stateMu.Lock()
@@ -333,13 +348,12 @@ func (s *mcpServer) evalRole() {
 		s.isArchitect = isArch
 		if isArch && fleetID != "" {
 			s.startWatcherLocked(fleetID)
+			dlogf("ROLE → architect, fleetID=%s", fleetID)
+		} else {
+			dlogf("ROLE → inert, fleetID=%q isArch=%v", fleetID, isArch)
 		}
 	}
 	s.stateMu.Unlock()
-	if roleChanged && isArch && fleetID != "" {
-		// Tell any subscribers that the resource set might have shifted.
-		s.notifyResourceUpdated(inboxURI(fleetID))
-	}
 }
 
 func (s *mcpServer) tearDownWatcher() {
@@ -401,16 +415,44 @@ func (s *mcpServer) watchLoop(w *fsnotify.Watcher, fleetID string, done chan str
 
 // ─── notifications ─────────────────────────────────────────────────────────
 
+// notifyResourceUpdated is the wake-up channel. We fire two notifications:
+//
+// (A) notifications/resources/updated — the protocol-correct path. Only
+// fires when the client has explicitly subscribed to this resource URI.
+// Empirically Claude Code 2.1.121 does NOT advertise resource handling
+// in clientInfo.capabilities and never subscribes, so this currently
+// never fires. Kept for protocol-compliant clients (and for Claude Code
+// versions that may add resource-subscription support later).
+//
+// (C) notifications/tools/list_changed — fires unconditionally. This is
+// the path that empirically wakes Claude Code 2.1.121: the client
+// re-fetches tools/list and, on the first transition (architect mode
+// becoming active), surfaces a system reminder to the agent announcing
+// the inbox tools. Claude Code dedupes after that, so subsequent fires
+// are silent — but the first wake-up is the load-bearing one.
+//
+// Two earlier experimental paths (B unconditional resources/updated,
+// D notifications/message) were removed after instrumented tracing
+// confirmed Claude Code drops both silently. See docs/mcp-investigation.md
+// for the trace evidence.
 func (s *mcpServer) notifyResourceUpdated(uri string) {
 	s.subMu.Lock()
 	subbed := s.subscribers[uri]
+	subCount := len(s.subscribers)
 	s.subMu.Unlock()
-	if !subbed {
-		return
+
+	if subbed {
+		dlogf("notify resources/updated (subscribed) uri=%s", uri)
+		s.notify("notifications/resources/updated", map[string]any{"uri": uri})
+	} else {
+		dlogf("notify resources/updated skipped (no subscriber, total=%d)", subCount)
 	}
-	s.notify("notifications/resources/updated", map[string]any{
-		"uri": uri,
-	})
+
+	// Always fire tools/list_changed. Cheap, harmless when client
+	// dedupes, and provides the only working wake-up path in current
+	// Claude Code.
+	dlogf("notify tools/list_changed")
+	s.notify("notifications/tools/list_changed", map[string]any{})
 }
 
 func (s *mcpServer) notify(method string, params any) {
@@ -537,6 +579,37 @@ func parseInboxURI(uri string) (string, bool) {
 		return "", false
 	}
 	return parts[0], true
+}
+
+// dlogf writes a debug line to /tmp/qai-conductor.log so we can trace
+// what Claude Code (or any client) does over the MCP wire.
+//
+// Gated by env QAI_CONDUCTOR_DEBUG=1 because in normal use Claude Code
+// shows server stderr to the user and we don't want our protocol-trace
+// noise leaking into that surface. The /tmp file is the actual trace
+// destination — read it with `tail -f /tmp/qai-conductor.log`.
+//
+// Note: writing to stderr ALSO works for diagnostics (Claude Code logs
+// MCP server stderr), but tailing a file is faster for live debugging.
+func dlogf(format string, args ...any) {
+	if os.Getenv("QAI_CONDUCTOR_DEBUG") == "" {
+		return
+	}
+	line := fmt.Sprintf(format, args...)
+	f, err := os.OpenFile("/tmp/qai-conductor.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s pid=%d %s\n", time.Now().Format("15:04:05.000"), os.Getpid(), line)
+}
+
+// truncate clips a string to n runes for log lines.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 // formatReports turns a slice of Reports into newline-delimited JSON,

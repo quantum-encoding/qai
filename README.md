@@ -27,6 +27,11 @@ go install github.com/quantum-encoding/qai-cli@latest
 qai init
 ```
 
+> **New here?** [`docs/getting-started.md`](docs/getting-started.md) walks
+> through the auth surface end-to-end — the one `QAI_API_KEY` that powers
+> the AI features, plus the optional secondary credentials (Joplin, Brave,
+> GCP, SurrealDB) for the non-AI surfaces.
+
 ## Commands
 
 ### Code Analysis

@@ -191,6 +191,18 @@ func doCreate(name string) {
 	if err != nil {
 		die(err)
 	}
+	// Path-style names ("qai/scans/foo") create the whole chain. Flat names
+	// keep the legacy single-folder behaviour so existing "Project Name"
+	// usages don't change shape.
+	if strings.Contains(name, "/") {
+		f, err := client.FindOrCreateFolderPath(name)
+		if err != nil {
+			die(err)
+		}
+		fmt.Printf("Created project: %s (%s)\n", name, f.ID)
+		setActive(name, f.ID)
+		return
+	}
 	existing, err := client.FindFolderByTitle(name)
 	if err != nil {
 		die(err)
@@ -216,6 +228,20 @@ func doSet(name string) {
 	client, err := newClient()
 	if err != nil {
 		die(err)
+	}
+	// Path-style names walk the chain; flat names keep the legacy
+	// case-sensitive title match. We deliberately do NOT fall back from
+	// path → flat: if the user typed slashes, surfacing "no project at
+	// that path" is more useful than silently matching a flat folder
+	// whose literal title happens to contain the same slashes.
+	if strings.Contains(name, "/") {
+		f, err := client.FindOrCreateFolderPath(name)
+		if err != nil {
+			die(err)
+		}
+		setActive(name, f.ID)
+		fmt.Printf("Active project: %s\n", name)
+		return
 	}
 	f, err := client.FindFolderByTitle(name)
 	if err != nil {

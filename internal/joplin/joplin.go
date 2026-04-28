@@ -193,6 +193,75 @@ func (c *Client) FindOrCreateFolder(title string) (*Folder, error) {
 	return c.CreateFolder(title, "")
 }
 
+// FindOrCreateFolderPath walks a `/`-delimited folder path, creating any
+// missing levels, and returns the leaf folder.
+//
+// Examples:
+//
+//	"qai"                       → folder titled "qai" at root
+//	"qai/scans"                 → "qai" at root, "scans" under "qai"
+//	"qai/scans/dag-cli"         → three-level chain
+//	"  qai / scans / dag-cli "  → same as above (segments are trimmed)
+//
+// Empty segments (leading/trailing/double slashes) are skipped, so
+// `/qai/scans/` and `qai/scans` resolve identically. An entirely empty
+// path is rejected.
+//
+// The lookup uses a single ListFolders call: callers paying for many
+// path lookups in a row should cache the client.
+func (c *Client) FindOrCreateFolderPath(path string) (*Folder, error) {
+	segments := SplitFolderPath(path)
+	if len(segments) == 0 {
+		return nil, fmt.Errorf("joplin: folder path is empty")
+	}
+
+	all, err := c.ListFolders()
+	if err != nil {
+		return nil, err
+	}
+	// Index folders by (parent, trimmed-title) for fast walk.
+	type key struct{ parent, title string }
+	index := make(map[key]*Folder, len(all))
+	for i := range all {
+		k := key{parent: all[i].ParentID, title: strings.TrimSpace(all[i].Title)}
+		index[k] = &all[i]
+	}
+
+	parentID := ""
+	var leaf *Folder
+	for _, segment := range segments {
+		if found, ok := index[key{parent: parentID, title: segment}]; ok {
+			leaf = found
+			parentID = found.ID
+			continue
+		}
+		created, err := c.CreateFolder(segment, parentID)
+		if err != nil {
+			return nil, fmt.Errorf("joplin: create %q under %q: %w", segment, parentID, err)
+		}
+		// Track the new folder for any later segments under the same parent.
+		index[key{parent: parentID, title: segment}] = created
+		leaf = created
+		parentID = created.ID
+	}
+	return leaf, nil
+}
+
+// SplitFolderPath splits a `/`-delimited folder path into trimmed,
+// non-empty segments. Exposed because callers occasionally want to
+// validate a path without performing the lookup.
+func SplitFolderPath(path string) []string {
+	parts := strings.Split(path, "/")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		s := strings.TrimSpace(p)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // UpdateFolderTitle PUTs a new title onto an existing folder.
 func (c *Client) UpdateFolderTitle(id, title string) error {
 	u, err := c.urlWithToken("/folders/"+url.PathEscape(id), nil)

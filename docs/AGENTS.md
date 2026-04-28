@@ -78,7 +78,7 @@ qai fleet down /tmp/mission.yaml
 
 ## Worker prompt construction
 
-Workers are fresh `claude` sessions in their own panes. Three rules
+Workers are fresh `claude` sessions in their own panes. Four rules
 worth following:
 
 1. **Tell the worker its task is permitted.** Bare imperatives ("scan
@@ -96,6 +96,16 @@ worth following:
    manifest at runtime and parameterise the prompt with the project
    name + per-project angle. A `for project in ...` loop in shell or
    in-memory in Go is fine.
+
+4. **Don't invoke rate-limited tools at fleet scale.** `qai security`
+   in particular hits NVD + GitHub advisory APIs that throttle hard
+   (NVD returns 429, GitHub 403) when 15 workers fire in parallel.
+   Result: every detector falls back to "0 CVE matches" and the audit
+   loses its CVE signal entirely. If you want CVE coverage on N
+   projects, run `qai security` serially from the architect *after*
+   the manual-audit fleet finishes, or do not include it in worker
+   prompts at all. The `qai security` tool is for one-codebase-at-a-
+   time use, not parallel bursts.
 
 ## The auto-classifier
 
@@ -269,11 +279,19 @@ qai term close <name> [--force]
   `tmux send-keys` directly when you need to address a pane by id
   (e.g. for fleet recovery). Worth fixing in `internal/terminal/ops.go`
   to route `%`-prefixed args straight to the tmux call.
-- `qai security` has known false-positive failure modes uncovered
-  during the 15-pane Rust mission: misclassifies non-`Command::new`
+- `qai security` has two known failure modes — both uncovered during
+  the 15-pane Rust mission. (a) **Rate-limit collapse at fleet scale**:
+  the underlying `rust-security-detector` queries NVD + GitHub
+  advisories for every dep; when 15 workers fire in parallel, NVD
+  returns `429 Too Many Requests` and GitHub returns `403 Forbidden`,
+  so every detector falls back to "0 CVE matches" and CVE coverage
+  is silently lost. Use it serially from the architect, not in worker
+  prompts. See "Worker prompt construction" rule 4. (b) **False
+  positives in pattern matching**: misclassifies non-`Command::new`
   calls (`WavWriter::new`) as command injection; sometimes scans the
   wrong codebase; flags its own pattern strings as findings when run
-  on `rust-security` itself. Worth a separate audit pass.
+  on `rust-security` itself. Both are upstream fixes in the
+  rust-security-detector repo.
 - `defaults.spawn_stagger` is plumbed in `spec.go` but unused under
   the current serial-spawn path. Reserved for if/when we reintroduce
   parallel spawn with explicit pacing.

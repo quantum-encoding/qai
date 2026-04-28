@@ -43,6 +43,10 @@ func CmdFleet(args []string) {
 		fleetNotifier(rest)
 	case "bootstrap":
 		fleetBootstrap()
+	case "mcp":
+		fleetMCP(rest)
+	case "mcp-install":
+		fleetMCPInstall()
 	default:
 		fmt.Fprintf(os.Stderr, "qai fleet: unknown action %q\n", action)
 		fleetUsage()
@@ -274,6 +278,42 @@ func fleetBootstrap() {
 	fmt.Print(architectPromptProtocol)
 }
 
+// ─── fleet mcp / mcp-install ─────────────────────────────────────────────
+
+func fleetMCP(args []string) {
+	if hasFlag(args, "--help") || hasFlag(args, "-h") {
+		fmt.Fprintln(os.Stderr, "usage: qai fleet mcp")
+		fmt.Fprintln(os.Stderr, "Conductor MCP server. Speaks JSON-RPC 2.0 over stdio (MCP stdio transport).")
+		fmt.Fprintln(os.Stderr, "Architect-only — exits cleanly when invoked from a worker pane.")
+		fmt.Fprintln(os.Stderr, "Configure under `mcpServers` in ~/.claude.json (run `qai fleet mcp-install` for the snippet).")
+		return
+	}
+	if err := RunMCPServer(); err != nil {
+		fmt.Fprintf(os.Stderr, "qai fleet mcp: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func fleetMCPInstall() {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		exe = "qai"
+	}
+	snippet := map[string]any{
+		"qai-conductor": map[string]any{
+			"type":    "stdio",
+			"command": exe,
+			"args":    []string{"fleet", "mcp"},
+		},
+	}
+	b, _ := json.MarshalIndent(snippet, "", "  ")
+	fmt.Println(`# Add this to the "mcpServers" object in ~/.claude.json:`)
+	fmt.Println(string(b))
+	fmt.Println()
+	fmt.Println(`# One-line jq install:`)
+	fmt.Printf(`jq '.mcpServers["qai-conductor"] = {type:"stdio", command:"%s", args:["fleet","mcp"]}' ~/.claude.json > ~/.claude.json.tmp && mv ~/.claude.json.tmp ~/.claude.json`+"\n", exe)
+}
+
 // architectPromptProtocol is the instruction block the human pastes into
 // their CLAUDE.md (or hands to the architect at session start) so the
 // architect knows what `[FLEET]` sentinels mean and how to act on them.
@@ -369,6 +409,8 @@ func fleetUsage() {
   qai fleet inbox     [--unread] [--watch]      Read worker reports
   qai fleet notifier  <fleet-id>                Run the notifier daemon (auto-started by 'up')
   qai fleet bootstrap                           Print the architect prompt-protocol block
+  qai fleet mcp                                 Run the conductor MCP server (stdio; for Claude Code)
+  qai fleet mcp-install                         Print the JSON snippet to add to ~/.claude.json mcpServers
 
 Manifest schema (v1):
   version: 1

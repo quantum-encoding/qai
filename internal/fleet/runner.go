@@ -19,7 +19,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/quantum-encoding/qai-cli/internal/terminal"
@@ -211,7 +210,7 @@ func startNotifier(fleetID string) error {
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachAttr()
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start notifier: %v", err)
 	}
@@ -238,7 +237,7 @@ func stopNotifier(fleetID string) error {
 		_ = os.Remove(path)
 		return nil
 	}
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+	if err := sigTerm(pid); err != nil {
 		// Stale pidfile or insufficient perms — both are "we did our
 		// best." The notifier removes the pidfile on clean exit.
 		_ = os.Remove(path)

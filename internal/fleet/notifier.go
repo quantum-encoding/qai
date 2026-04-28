@@ -417,7 +417,7 @@ func readArchitectPane(fleetID string) (string, error) {
 func acquirePidfile(path string) error {
 	if data, err := os.ReadFile(path); err == nil {
 		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
-			if err := syscall.Kill(pid, 0); err == nil {
+			if processAlive(pid) {
 				return fmt.Errorf("notifier already running (pid %d)", pid)
 			}
 		}

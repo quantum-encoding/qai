@@ -100,13 +100,13 @@ if has go; then
   go install github.com/quantum-encoding/qai-cli@latest 2>/dev/null
   QAI_BIN="$(go env GOPATH)/bin/qai-cli"
   if [[ -f "$QAI_BIN" ]]; then
-    cp "$QAI_BIN" "${INSTALL_DIR}/qai"
-    chmod +x "${INSTALL_DIR}/qai"
-    # macOS: strip Gatekeeper xattrs that Gatekeeper would otherwise use
-    # to silently SIGKILL the binary on first run (exit 137, no output).
-    # `cp` reliably inherits com.apple.provenance; downloaded binaries
-    # also pick up com.apple.quarantine. Strip both, defensively, then
-    # do a full xattr -c as a belt-and-braces clear.
+    # Use `install(1)` rather than `cp`: cp on macOS causes Gatekeeper
+    # to silently SIGKILL the destination binary on first run (exit 137,
+    # no output, no error message). install(1) creates a fresh inode
+    # with metadata Gatekeeper treats as benign. Empirically verified
+    # — the xattr difference between the two paths is the same, but
+    # only cp triggers the kill. Strip xattrs anyway as belt-and-braces.
+    install -m 755 "$QAI_BIN" "${INSTALL_DIR}/qai"
     if [[ "$OS" == "darwin" ]]; then
       xattr -d com.apple.quarantine "${INSTALL_DIR}/qai" 2>/dev/null || true
       xattr -d com.apple.provenance "${INSTALL_DIR}/qai" 2>/dev/null || true

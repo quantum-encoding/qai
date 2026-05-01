@@ -102,6 +102,16 @@ if has go; then
   if [[ -f "$QAI_BIN" ]]; then
     cp "$QAI_BIN" "${INSTALL_DIR}/qai"
     chmod +x "${INSTALL_DIR}/qai"
+    # macOS: strip Gatekeeper xattrs that Gatekeeper would otherwise use
+    # to silently SIGKILL the binary on first run (exit 137, no output).
+    # `cp` reliably inherits com.apple.provenance; downloaded binaries
+    # also pick up com.apple.quarantine. Strip both, defensively, then
+    # do a full xattr -c as a belt-and-braces clear.
+    if [[ "$OS" == "darwin" ]]; then
+      xattr -d com.apple.quarantine "${INSTALL_DIR}/qai" 2>/dev/null || true
+      xattr -d com.apple.provenance "${INSTALL_DIR}/qai" 2>/dev/null || true
+      xattr -c "${INSTALL_DIR}/qai" 2>/dev/null || true
+    fi
     ok "qai installed ($(${INSTALL_DIR}/qai help 2>&1 | head -1))"
   else
     fail "go install failed"

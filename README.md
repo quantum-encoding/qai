@@ -22,6 +22,17 @@ go install github.com/quantum-encoding/qai-cli@latest
 | Linux ARM64 | `qai-linux-arm64` |
 | Windows x86_64 | `qai-windows-amd64.exe` |
 
+**macOS users downloading a release tarball directly:** strip the
+quarantine xattr after extracting, or Gatekeeper will silently kill
+the binary on first run (exit 137, no output):
+
+```bash
+xattr -c ~/.local/bin/qai     # or wherever you put it
+```
+
+The `install.sh` script does this automatically; only manual extracts
+need it.
+
 ```bash
 # First-time setup
 qai init

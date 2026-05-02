@@ -25,6 +25,7 @@ import (
 	"github.com/quantum-encoding/qai-cli/internal/graph"
 	"github.com/quantum-encoding/qai-cli/internal/ingest"
 	"github.com/quantum-encoding/qai-cli/internal/initcmd"
+	"github.com/quantum-encoding/qai-cli/internal/note"
 	"github.com/quantum-encoding/qai-cli/internal/project"
 	"github.com/quantum-encoding/qai-cli/internal/scrape"
 	"github.com/quantum-encoding/qai-cli/internal/search"
@@ -52,6 +53,7 @@ func main() {
 	db.Cfg = cfg
 	project.Cfg = cfg
 	agent.Cfg = cfg
+	note.Cfg = cfg
 
 	if len(os.Args) < 2 {
 		printUsage()
@@ -144,6 +146,8 @@ func main() {
 		project.CmdProject(args) // handles its own --help
 	case "agent":
 		agent.CmdAgent(args) // handles its own --help
+	case "note", "n":
+		note.CmdNote(args) // handles its own --help
 	case "term", "terminal", "t":
 		terminal.CmdTerminal(args) // handles its own --help
 	case "fleet":
@@ -634,6 +638,7 @@ System:
   conduct   Multi-model API gateway (low-level access)
   project   Joplin-backed projects (list/create/set/show/notes)
   agent     Joplin-backed skills / agent profiles / instructions store
+  note      Save a session summary or user TODO to Joplin
   token     GCP token refresh / identity tokens
   models    Search model registry (pricing, context, IDs)
   init      Interactive first-time configuration wizard

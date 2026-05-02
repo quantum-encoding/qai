@@ -42,6 +42,11 @@ qai init
 > through the auth surface end-to-end — the one `QAI_API_KEY` that powers
 > the AI features, plus the optional secondary credentials (Joplin, Brave,
 > GCP, SurrealDB) for the non-AI surfaces.
+>
+> **Working with an agent?** [`docs/notes.md`](docs/notes.md) covers
+> `qai note` for saving session summaries + user TODOs to Joplin —
+> the agent-shorter-message pattern, plus the optional Claude Code
+> Stop-hook for automatic capture.
 
 ## Commands
 

@@ -100,61 +100,101 @@ func BraveSearchJSON(query string, count int) []byte {
 	return body
 }
 
+// BraveAsk calls the Brave Answers API (/res/v1/chat/completions) and
+// prints the grounded reply plus citations.
+//
+// Migrated 2026-05-20 from the deprecated Summarizer field that used
+// to ride along on /res/v1/web/search?summary=1. Brave deprecated
+// that endpoint on 2026-05-17 (90-day sunset). The Answers API is the
+// official replacement — see https://api.search.brave.com/app/documentation/answers.
+//
+// BRAVE_ANSWERS_API_KEY may be set if your Answers subscription uses
+// a different key than the Search subscription. Falls back to
+// BRAVE_SEARCH_API_KEY when unset (Brave currently provisions a
+// single key by default).
 func BraveAsk(question string) {
-	key := os.Getenv("BRAVE_SEARCH_API_KEY")
+	key := os.Getenv("BRAVE_ANSWERS_API_KEY")
 	if key == "" {
-		fmt.Fprintln(os.Stderr, "BRAVE_SEARCH_API_KEY not set")
+		key = os.Getenv("BRAVE_SEARCH_API_KEY")
+	}
+	if key == "" {
+		fmt.Fprintln(os.Stderr, "BRAVE_SEARCH_API_KEY not set (or BRAVE_ANSWERS_API_KEY for separate subscription)")
 		os.Exit(1)
 	}
 
-	params := url.Values{"q": {question}}
-	req, _ := http.NewRequest("GET", braveBaseURL+"/res/v1/web/search?"+params.Encode(), nil)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-Subscription-Token", key)
+	body, err := json.Marshal(map[string]any{
+		"model":  "brave",
+		"stream": false,
+		"messages": []map[string]string{
+			{"role": "user", "content": question},
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "brave ask: marshal request: %v\n", err)
+		os.Exit(1)
+	}
 
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	req, _ := http.NewRequest("POST", braveBaseURL+"/res/v1/chat/completions", strings.NewReader(string(body)))
+	req.Header.Set("X-Subscription-Token", key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "brave ask: %v\n", err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
-		fmt.Fprintf(os.Stderr, "brave ask %d: %s\n", resp.StatusCode, strutil.TruncateStr(string(body), 200))
+		fmt.Fprintf(os.Stderr, "brave ask %d: %s\n", resp.StatusCode, strutil.TruncateStr(string(respBody), 200))
 		os.Exit(1)
 	}
 
-	// Try to extract summarizer/answer if available, otherwise show web results
 	var result struct {
-		Summarizer struct {
-			Results []struct {
-				Text string `json:"text"`
-			} `json:"results"`
-		} `json:"summarizer"`
-		Web struct {
-			Results []struct {
-				Title       string `json:"title"`
-				URL         string `json:"url"`
-				Description string `json:"description"`
-			} `json:"results"`
-		} `json:"web"`
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Citations []struct {
+			URL     string `json:"url"`
+			Title   string `json:"title"`
+			Snippet string `json:"snippet"`
+		} `json:"citations"`
 	}
-	json.Unmarshal(body, &result)
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		fmt.Fprintf(os.Stderr, "brave ask: parse response: %v\n", err)
+		os.Exit(1)
+	}
 
-	if len(result.Summarizer.Results) > 0 {
-		for _, r := range result.Summarizer.Results {
-			fmt.Println(r.Text)
+	for _, c := range result.Choices {
+		if c.Message.Content != "" {
+			fmt.Println(c.Message.Content)
 		}
-		return
 	}
-
-	// Fallback to web results
-	for i, r := range result.Web.Results {
-		fmt.Printf("%d. %s\n   %s\n   %s\n\n", i+1, r.Title, r.URL, r.Description)
+	if len(result.Citations) > 0 {
+		fmt.Println()
+		fmt.Println("Sources:")
+		for i, c := range result.Citations {
+			title := c.Title
+			if title == "" {
+				title = c.URL
+			}
+			fmt.Printf("  %d. %s\n     %s\n", i+1, title, c.URL)
+		}
 	}
 }
 
+// BraveContext fetches LLM-optimized content chunks for a query via
+// the /res/v1/llm/context endpoint and prints the raw JSON for
+// downstream LLM consumption.
+//
+// Migrated 2026-05-20 from /res/v1/web/search?summary=1, which is on
+// Brave's 90-day deprecation window (sunset 2026-08-15). The
+// llm/context endpoint is purpose-built for this use case and is
+// not affected by the Summarizer deprecation.
 func BraveContext(query string) {
 	key := os.Getenv("BRAVE_SEARCH_API_KEY")
 	if key == "" {
@@ -162,8 +202,8 @@ func BraveContext(query string) {
 		os.Exit(1)
 	}
 
-	params := url.Values{"q": {query}, "summary": {"1"}}
-	req, _ := http.NewRequest("GET", braveBaseURL+"/res/v1/web/search?"+params.Encode(), nil)
+	params := url.Values{"q": {query}}
+	req, _ := http.NewRequest("GET", braveBaseURL+"/res/v1/llm/context?"+params.Encode(), nil)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Subscription-Token", key)
 
@@ -180,7 +220,7 @@ func BraveContext(query string) {
 		os.Exit(1)
 	}
 
-	// Print raw JSON for LLM consumption
+	// Print raw JSON for LLM consumption.
 	var pretty json.RawMessage
 	if json.Unmarshal(body, &pretty) == nil {
 		out, _ := json.MarshalIndent(pretty, "", "  ")

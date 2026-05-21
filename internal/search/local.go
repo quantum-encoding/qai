@@ -32,10 +32,12 @@ func LocalSurreal(query, provider string, limit int) {
 	embs, err := embedding.Dispatch(Cfg, []string{query})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai search --local: embed failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  → fix: verify embeddings provider %q is reachable and configured (check QAI_API_KEY for qai-broker, or `gcloud auth application-default login` for Vertex)\n", Cfg.Embeddings.Provider)
 		os.Exit(1)
 	}
 	if len(embs) == 0 || len(embs[0]) == 0 {
-		fmt.Fprintln(os.Stderr, "qai search --local: empty embedding")
+		fmt.Fprintln(os.Stderr, "qai search --local: empty embedding returned from provider")
+		fmt.Fprintf(os.Stderr, "  → fix: check embeddings provider %q (%s) returned a non-empty vector\n", Cfg.Embeddings.Provider, Cfg.Embeddings.Model)
 		os.Exit(1)
 	}
 
@@ -69,11 +71,13 @@ func LocalSurreal(query, provider string, limit int) {
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(body, &stmts); err != nil || len(stmts) == 0 {
-		fmt.Fprintf(os.Stderr, "qai search --local: parse response: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai search --local: parse SurrealDB response: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  raw response: %s\n", strutil.TruncateStr(string(body), 200))
 		os.Exit(1)
 	}
 	if stmts[0].Status == "ERR" {
-		fmt.Fprintf(os.Stderr, "qai search --local: query error: %s\n", string(body))
+		fmt.Fprintf(os.Stderr, "qai search --local: SurrealQL error: %s\n", string(body))
+		fmt.Fprintln(os.Stderr, "  → fix: check that the doc_chunk table exists; rebuild with `qai ingest --local <provider> <path>`")
 		os.Exit(1)
 	}
 
@@ -168,11 +172,13 @@ func LocalText(query, provider string, limit int) {
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(body, &stmts); err != nil || len(stmts) == 0 {
-		fmt.Fprintf(os.Stderr, "qai search --text: parse response: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai search --text: parse SurrealDB response: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  raw response: %s\n", strutil.TruncateStr(string(body), 200))
 		os.Exit(1)
 	}
 	if stmts[0].Status == "ERR" {
-		fmt.Fprintf(os.Stderr, "qai search --text: query error: %s\n", string(body))
+		fmt.Fprintf(os.Stderr, "qai search --text: SurrealQL error: %s\n", string(body))
+		fmt.Fprintln(os.Stderr, "  → fix: check that the doc_chunk table exists; rebuild with `qai ingest --local <provider> <path>`")
 		os.Exit(1)
 	}
 
@@ -229,7 +235,8 @@ func ReadLocalFile(sourceFile, provider string) {
 		} `json:"result"`
 	}
 	if json.Unmarshal(body, &stmts) != nil || len(stmts) == 0 || len(stmts[0].Result) == 0 {
-		fmt.Fprintf(os.Stderr, "No file found matching %q\n", sourceFile)
+		fmt.Fprintf(os.Stderr, "qai search --read: no file matching %q\n", sourceFile)
+		fmt.Fprintln(os.Stderr, "  → fix: list available files with `qai search --list` (optionally with -p <provider>)")
 		os.Exit(1)
 	}
 
@@ -262,7 +269,8 @@ func ListLocalFiles(provider string) {
 		} `json:"result"`
 	}
 	if json.Unmarshal(body, &stmts) != nil || len(stmts) == 0 {
-		fmt.Fprintln(os.Stderr, "No files found.")
+		fmt.Fprintln(os.Stderr, "qai search --list: no files found in local SurrealDB")
+		fmt.Fprintln(os.Stderr, "  → fix: ingest content with `qai ingest --local <provider> <path>`")
 		os.Exit(1)
 	}
 
@@ -308,7 +316,7 @@ func LocalSimilar(sourceFile, provider string, limit int) {
 	}
 	if json.Unmarshal(body, &lookup) != nil || len(lookup) == 0 || len(lookup[0].Result) == 0 {
 		fmt.Fprintf(os.Stderr, "qai search --similar: no chunk found matching %q\n", sourceFile)
-		fmt.Fprintln(os.Stderr, "Tip: use a partial path, e.g. 'Allocator.zig' or 'hash/mod.rs'")
+		fmt.Fprintln(os.Stderr, "  → fix: use a partial path (e.g. 'Allocator.zig' or 'hash/mod.rs'); list files with `qai search --list`")
 		os.Exit(1)
 	}
 
@@ -342,7 +350,8 @@ func LocalSimilar(sourceFile, provider string, limit int) {
 		} `json:"result"`
 	}
 	if json.Unmarshal(body2, &stmts) != nil || len(stmts) == 0 {
-		fmt.Fprintln(os.Stderr, "qai search --similar: parse error")
+		fmt.Fprintln(os.Stderr, "qai search --similar: parse SurrealDB response failed")
+		fmt.Fprintf(os.Stderr, "  raw response: %s\n", strutil.TruncateStr(string(body2), 200))
 		os.Exit(1)
 	}
 
@@ -380,8 +389,8 @@ func postLocalSQL(sql string, timeout time.Duration, label string) []byte {
 
 	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s: SurrealDB connection failed: %v\n", label, err)
-		fmt.Fprintln(os.Stderr, "Is SurrealDB running? Start with: qai db start")
+		fmt.Fprintf(os.Stderr, "%s: local SurrealDB unreachable at %s: %v\n", label, conn.URL, err)
+		fmt.Fprintln(os.Stderr, "  → fix: start the local instance with `qai db start`")
 		os.Exit(1)
 	}
 	defer resp.Body.Close()

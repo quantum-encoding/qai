@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/quantum-encoding/qai-cli/internal/agent"
@@ -150,6 +151,10 @@ func main() {
 		token.CmdToken(args)
 	case "models":
 		cmdModels(args)
+	case "cheat":
+		fmt.Println(cheatSheet)
+	case "plugins":
+		cmdPlugins(args)
 	case "conduct", "c":
 		conduct.CmdConduct(args) // handles its own --help
 	case "project", "proj":
@@ -597,6 +602,148 @@ func cmdModels(args []string) {
 	}
 }
 
+// ─── cheat / plugins ────────────────────────────────────────────────────────
+
+// cheatSheet is `qai cheat` — a one-screen summary of common usage
+// across every subcommand. The intent: a fresh agent (or human) can
+// read this once, in one turn, instead of running `qai foo` to get
+// a usage hint then `qai foo --help` for detail then maybe
+// `qai foo bar --help` for the subcommand. Probe-then-probe-help
+// is the friction this closes.
+const cheatSheet = `qai cheat — common usage at a glance (each command has --help for detail)
+
+Media
+  qai image "prompt"                        # Nano Banana Pro by default
+  qai image "prompt" gpt                    # OpenAI alias (or grok, gemini-flash, ...)
+  qai image --batch prompts.txt --parallel 4
+  qai edit input.png "prompt"
+  qai video "prompt"
+  qai tts "text" [voice]
+  qai music "prompt"
+
+Search & knowledge
+  qai search "query"                        # Joplin → RAG → web, in order
+  qai web "query"                           # Brave web search
+  qai ask "question"                        # AI-grounded answer + citations
+  qai context "query"                       # Brave LLM-context chunks
+  qai clip <url> [notebook] [title]         # save web page to Joplin
+
+Notes (Joplin-backed memory)
+  qai note "what you did"                   # → qai/sessions
+  qai note --todo "human-only task"         # → qai/todos
+  qai recall                                # read recent notes for THIS project
+  qai recall --project '*'                  # cross-project firehose (opt-in)
+  qai recall --session <id> --full          # one note, full body
+
+Code
+  qai analyze <path>                        # compiler-accurate (Go, Rust, TS, Py, Swift, Kotlin)
+  qai scan <path>                           # multi-engine code scanner
+  qai compile <target>
+  qai graph <target>
+  qai security <target>                     # CWE-mapped vuln scan (serial; don't fleet it)
+  qai audit <path>                          # LLM code audit with profiles
+
+Fleet & agents
+  qai fleet up <manifest.yaml>              # N parallel claude panes
+  qai fleet inbox --unread --json
+  qai fleet down <manifest.yaml>
+  qai term spawn <name>                     # ad-hoc subagent in a tmux pane
+  qai term send <name|%paneID> "text"
+  qai sessions list                         # discover Claude Code sessions
+
+Browser (CDP — connect to running Chrome/Brave on :9222)
+  qai browser audit <url>                   # one-shot: nav + network + console + perf + shot
+  qai browser network --duration 10s -o reqs.json
+  qai browser eval "js"                     # DevTools Console
+  qai browser screenshot -o page.png
+  qai browser pdf -o page.pdf
+
+System
+  qai doctor                                # health-check every dependency
+  qai init                                  # first-time setup wizard
+  qai models [filter]                       # model registry lookup
+  qai token --check                         # GCP ADC status
+  qai cheat                                 # this view
+  qai plugins                               # list ~/.local/bin/qai-* plugins
+
+Workflow tips
+  - Auth: ONE QAI_API_KEY unlocks media/search/audit (https://quantumencoding.ai)
+  - Joplin: launch desktop + enable Web Clipper Service
+  - Brave/GCP/Surreal: optional per-feature credentials, see qai doctor
+`
+
+// cmdPlugins handles 'qai plugins [list]' — lists qai-* executables on
+// PATH. Plugins are how qai picks up third-party verbs (drop an
+// executable named qai-foo on PATH; qai foo runs it). Without this
+// command, agents had no way to discover what plugins are installed
+// short of scanning the filesystem manually.
+func cmdPlugins(args []string) {
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			fmt.Println(helpPlugins)
+			return
+		}
+	}
+	// Scan every directory on PATH for executables named "qai-*".
+	pathDirs := strings.Split(os.Getenv("PATH"), string(os.PathListSeparator))
+	seen := map[string]string{} // name → first-resolved path (PATH precedence)
+	for _, dir := range pathDirs {
+		if dir == "" {
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasPrefix(name, "qai-") {
+				continue
+			}
+			if e.IsDir() {
+				continue
+			}
+			full := filepath.Join(dir, name)
+			info, err := e.Info()
+			if err != nil || info.Mode()&0o111 == 0 {
+				continue // not executable
+			}
+			short := strings.TrimPrefix(name, "qai-")
+			if _, ok := seen[short]; !ok {
+				seen[short] = full
+			}
+		}
+	}
+	if len(seen) == 0 {
+		fmt.Println("(no qai-* plugins on PATH)")
+		fmt.Println("Drop an executable named qai-<verb> on $PATH to add a subcommand.")
+		return
+	}
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		fmt.Printf("  %-20s  %s\n", n, seen[n])
+	}
+}
+
+const helpPlugins = `qai plugins — list third-party qai-* plugins on PATH
+
+Plugins are an extension mechanism: any executable named qai-<verb>
+on $PATH is invocable as 'qai <verb>'. This command surfaces what's
+installed so agents (and humans) don't have to grep the filesystem.
+
+USAGE
+  qai plugins             List installed plugins
+  qai plugins --help      This help
+
+HOW TO ADD A PLUGIN
+  Drop an executable named qai-<verb> anywhere on your $PATH. e.g.:
+    install -m 755 /path/to/qai-deploy ~/.local/bin/
+    qai deploy           # now works`
+
 // ─── exec helpers ───────────────────────────────────────────────────────────
 
 func run(name string, args ...string) {
@@ -655,6 +802,8 @@ System:
   note      Save a session summary or user TODO to Joplin
   recall    Read recent session notes + open TODOs (read-side of note)
   doctor    Health-check every dependency qai talks to
+  cheat     One-screen quickref of common usage across commands
+  plugins   List qai-* plugins on PATH
   token     GCP token refresh / identity tokens
   models    Search model registry (pricing, context, IDs)
   init      Interactive first-time configuration wizard

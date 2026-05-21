@@ -67,7 +67,7 @@ func RAGSearch(args []string) {
 	base := APIBase()
 	if base == "" {
 		fmt.Fprintln(os.Stderr, "qai search --rag: GCP project not configured")
-		fmt.Fprintln(os.Stderr, "  Set vertex.project + vertex.region in ~/.qai/config.yaml or run: qai init")
+		fmt.Fprintln(os.Stderr, "  → fix: set vertex.project + vertex.region in ~/.qai/config.yaml (or RAG_PROJECT/RAG_REGION env vars), or run `qai init`")
 		os.Exit(1)
 	}
 
@@ -103,12 +103,14 @@ func RAGSearch(args []string) {
 	// Auth
 	creds, err := token.LoadGCPADC()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai search --rag: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai search --rag: load GCP credentials failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: run `gcloud auth application-default login`")
 		os.Exit(1)
 	}
 	tok, err := token.RefreshToken(creds)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai search --rag: auth: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai search --rag: refresh GCP access token failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: run `gcloud auth application-default login` to refresh ADC")
 		os.Exit(1)
 	}
 	token := tok.AccessToken
@@ -116,7 +118,8 @@ func RAGSearch(args []string) {
 	// List corpora
 	corpora, err := ragListCorpora(base, token)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai search --rag: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai search --rag: list corpora failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: verify Vertex AI RAG is enabled on the configured project and the ADC principal has aiplatform.user")
 		os.Exit(1)
 	}
 
@@ -133,6 +136,7 @@ func RAGSearch(args []string) {
 		}
 		if len(searchCorpora) == 0 {
 			fmt.Fprintf(os.Stderr, "qai search --rag: no corpus matching %q\n", corpusFilter)
+			fmt.Fprintln(os.Stderr, "  → fix: list available corpora with `qai rag corpora`")
 			os.Exit(1)
 		}
 	} else {
@@ -159,7 +163,8 @@ func RAGSearch(args []string) {
 	}
 
 	if len(searchCorpora) == 0 {
-		fmt.Fprintln(os.Stderr, "qai search --rag: no active corpora")
+		fmt.Fprintln(os.Stderr, "qai search --rag: no active corpora in this project")
+		fmt.Fprintln(os.Stderr, "  → fix: create a corpus with `qai rag-ingestion` or list them with `qai rag corpora`")
 		os.Exit(1)
 	}
 
@@ -285,23 +290,27 @@ func ragCorpora(args []string) {
 	base := APIBase()
 	if base == "" {
 		fmt.Fprintln(os.Stderr, "qai rag corpora: GCP project not configured")
+		fmt.Fprintln(os.Stderr, "  → fix: set vertex.project + vertex.region in ~/.qai/config.yaml (or RAG_PROJECT/RAG_REGION env vars), or run `qai init`")
 		os.Exit(1)
 	}
 
 	creds, err := token.LoadGCPADC()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai rag: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai rag corpora: load GCP credentials failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: run `gcloud auth application-default login`")
 		os.Exit(1)
 	}
 	tok, err := token.RefreshToken(creds)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai rag: auth: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai rag corpora: refresh GCP access token failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: run `gcloud auth application-default login` to refresh ADC")
 		os.Exit(1)
 	}
 
 	corpora, err := ragListCorpora(base, tok.AccessToken)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai rag: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai rag corpora: list corpora failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: verify Vertex AI RAG is enabled on the configured project and the ADC principal has aiplatform.user")
 		os.Exit(1)
 	}
 

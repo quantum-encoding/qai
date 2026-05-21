@@ -115,7 +115,8 @@ Env vars:
 	// 1. Chunk via axiom.
 	chunks := chunkDocs(path)
 	if len(chunks) == 0 {
-		fmt.Fprintln(os.Stderr, "qai ingest: no chunks produced")
+		fmt.Fprintf(os.Stderr, "qai ingest: no chunks produced from %s\n", path)
+		fmt.Fprintln(os.Stderr, "  → fix: verify the path contains .md/.txt/.pdf/.mdx/.rst files (or install `axiom` for richer chunking)")
 		os.Exit(1)
 	}
 	fmt.Printf("Got %d chunks\n", len(chunks))
@@ -133,7 +134,8 @@ Env vars:
 			fmt.Printf("Target: local SurrealDB (%s)\n", Cfg.LocalSurrealURL())
 		} else {
 			if Cfg.Surreal.CloudURL == "" {
-				fmt.Fprintln(os.Stderr, "qai ingest: no cloud SurrealDB configured — run: qai init")
+				fmt.Fprintln(os.Stderr, "qai ingest --surreal: no cloud SurrealDB configured")
+				fmt.Fprintln(os.Stderr, "  → fix: run `qai init` or set SURREAL_CLOUD_URL / SURREAL_CLOUD_USER / SURREAL_CLOUD_PASS (use --local to target the local instance instead)")
 				os.Exit(1)
 			}
 			conn = Cfg.CloudConn()
@@ -165,7 +167,8 @@ func chunkDocs(path string) []chunk {
 func chunkDocsAxiom(path string) []chunk {
 	tmpChunks, err := os.MkdirTemp("", "qai-ingest-*")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai ingest: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai ingest: cannot create temp chunk dir under %s: %v\n", os.TempDir(), err)
+		fmt.Fprintln(os.Stderr, "  → fix: verify $TMPDIR is writable and has free space")
 		os.Exit(1)
 	}
 	defer os.RemoveAll(tmpChunks)
@@ -174,7 +177,8 @@ func chunkDocsAxiom(path string) []chunk {
 
 	info, err := os.Stat(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai ingest: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai ingest: cannot stat %s: %v\n", path, err)
+		fmt.Fprintln(os.Stderr, "  → fix: verify the path exists and is readable")
 		os.Exit(1)
 	}
 
@@ -246,7 +250,8 @@ func embedAllChunks(chunks []chunk) [][]float64 {
 
 		embs, err := embedding.Dispatch(Cfg, texts)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "embed batch %d failed: %v\n", i/embedBatchSize+1, err)
+			fmt.Fprintf(os.Stderr, "qai ingest: embed batch %d failed: %v\n", i/embedBatchSize+1, err)
+			fmt.Fprintf(os.Stderr, "  → fix: verify embeddings provider %q is reachable and configured (check QAI_API_KEY for qai-broker, or `gcloud auth application-default login` for Vertex)\n", Cfg.Embeddings.Provider)
 			os.Exit(1)
 		}
 
@@ -308,7 +313,8 @@ func ingestPrecomputed(conn config.SurrealConn, provider, archiveDir string) {
 	// Locate files.
 	metadataPath := filepath.Join(archiveDir, "metadata.jsonl")
 	if _, err := os.Stat(metadataPath); err != nil {
-		fmt.Fprintf(os.Stderr, "qai ingest --precomputed: metadata.jsonl not found in %s\n", archiveDir)
+		fmt.Fprintf(os.Stderr, "qai ingest --precomputed: metadata.jsonl not found in %s: %v\n", archiveDir, err)
+		fmt.Fprintln(os.Stderr, "  → fix: confirm the archive dir contains metadata.jsonl + results.jsonl + bodies/ (MetalEmbeddings raw archive layout)")
 		os.Exit(1)
 	}
 
@@ -316,6 +322,7 @@ func ingestPrecomputed(conn config.SurrealConn, provider, archiveDir string) {
 	resultsPath := findResultsFile(archiveDir)
 	if resultsPath == "" {
 		fmt.Fprintf(os.Stderr, "qai ingest --precomputed: no results.jsonl or *.telemetry.jsonl found in %s\n", archiveDir)
+		fmt.Fprintln(os.Stderr, "  → fix: confirm the archive dir contains results.jsonl (or *.telemetry.jsonl files) alongside bodies/")
 		os.Exit(1)
 	}
 	fmt.Printf("Archive: %s\n", archiveDir)
@@ -331,7 +338,8 @@ func ingestPrecomputed(conn config.SurrealConn, provider, archiveDir string) {
 
 	resultsFile, err := os.Open(resultsPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "open results: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai ingest --precomputed: cannot open %s: %v\n", resultsPath, err)
+		fmt.Fprintln(os.Stderr, "  → fix: verify the file exists and is readable")
 		os.Exit(1)
 	}
 	scanner := bufio.NewScanner(resultsFile)
@@ -362,7 +370,8 @@ func ingestPrecomputed(conn config.SurrealConn, provider, archiveDir string) {
 
 	metaFile, err := os.Open(metadataPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "open metadata: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai ingest --precomputed: cannot open %s: %v\n", metadataPath, err)
+		fmt.Fprintln(os.Stderr, "  → fix: verify the file exists and is readable")
 		os.Exit(1)
 	}
 	defer metaFile.Close()
@@ -402,7 +411,8 @@ func ingestPrecomputed(conn config.SurrealConn, provider, archiveDir string) {
 		}
 	}
 	if dimension == 0 {
-		fmt.Fprintln(os.Stderr, "qai ingest --precomputed: could not detect vector dimension")
+		fmt.Fprintln(os.Stderr, "qai ingest --precomputed: could not detect vector dimension from any batch body")
+		fmt.Fprintln(os.Stderr, "  → fix: verify bodies/ contains valid TEI predictions JSON and batchIDs in metadata match those in results.jsonl")
 		os.Exit(1)
 	}
 	fmt.Printf("  dimension: %d\n\n", dimension)
@@ -573,7 +583,8 @@ func storeVertex(provider string, chunks []chunk, embeddings [][]float64, bucket
 	jsonlPath := filepath.Join(os.TempDir(), provider+"-vectors.json")
 	f, err := os.Create(jsonlPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create jsonl: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai ingest --vertex: cannot create %s: %v\n", jsonlPath, err)
+		fmt.Fprintln(os.Stderr, "  → fix: verify $TMPDIR is writable and has free space")
 		os.Exit(1)
 	}
 	for i, c := range chunks {
@@ -598,7 +609,8 @@ func storeVertex(provider string, chunks []chunk, embeddings [][]float64, bucket
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "gsutil cp failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai ingest --vertex: gsutil cp failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  → fix: install/authorize gsutil (`gcloud auth login`) and verify write access to bucket %q\n", bucket)
 		os.Exit(1)
 	}
 
@@ -630,7 +642,8 @@ func storeVertex(provider string, chunks []chunk, embeddings [][]float64, bucket
 
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create index failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai ingest --vertex: create index request failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: verify network access to *.googleapis.com and that `gcloud auth application-default login` is current")
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
@@ -647,7 +660,14 @@ func storeVertex(provider string, chunks []chunk, embeddings [][]float64, bucket
 	}
 
 	if resp.StatusCode >= 400 {
-		fmt.Fprintf(os.Stderr, "create index %d: %s\n", resp.StatusCode, string(respBody)[:300])
+		snippet := string(respBody)
+		if len(snippet) > 300 {
+			snippet = snippet[:300]
+		}
+		fmt.Fprintf(os.Stderr, "qai ingest --vertex: create index returned HTTP %d: %s\n", resp.StatusCode, snippet)
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			fmt.Fprintln(os.Stderr, "  → fix: ensure ADC principal has roles/aiplatform.user; run `gcloud auth application-default login`")
+		}
 		os.Exit(1)
 	}
 

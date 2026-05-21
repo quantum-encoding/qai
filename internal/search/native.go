@@ -30,7 +30,8 @@ const braveBaseURL = "https://api.search.brave.com"
 func BraveSearch(query string, count int, freshness string) {
 	key := os.Getenv("BRAVE_SEARCH_API_KEY")
 	if key == "" {
-		fmt.Fprintln(os.Stderr, "BRAVE_SEARCH_API_KEY not set")
+		fmt.Fprintln(os.Stderr, "qai search: BRAVE_SEARCH_API_KEY not set")
+		fmt.Fprintln(os.Stderr, "  → fix: export BRAVE_SEARCH_API_KEY=<key>  (get one at https://api.search.brave.com/)")
 		os.Exit(1)
 	}
 
@@ -48,14 +49,18 @@ func BraveSearch(query string, count int, freshness string) {
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "brave search: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai search: brave search request failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: check network connectivity to api.search.brave.com")
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
-		fmt.Fprintf(os.Stderr, "brave search %d: %s\n", resp.StatusCode, strutil.TruncateStr(string(body), 200))
+		fmt.Fprintf(os.Stderr, "qai search: brave search returned HTTP %d: %s\n", resp.StatusCode, strutil.TruncateStr(string(body), 200))
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			fmt.Fprintln(os.Stderr, "  → fix: verify BRAVE_SEARCH_API_KEY at https://api.search.brave.com/app/dashboard")
+		}
 		os.Exit(1)
 	}
 
@@ -118,7 +123,8 @@ func BraveAsk(question string) {
 		key = os.Getenv("BRAVE_SEARCH_API_KEY")
 	}
 	if key == "" {
-		fmt.Fprintln(os.Stderr, "BRAVE_SEARCH_API_KEY not set (or BRAVE_ANSWERS_API_KEY for separate subscription)")
+		fmt.Fprintln(os.Stderr, "qai ask: BRAVE_SEARCH_API_KEY not set (or BRAVE_ANSWERS_API_KEY for a separate Answers subscription)")
+		fmt.Fprintln(os.Stderr, "  → fix: export BRAVE_SEARCH_API_KEY=<key>  (get one at https://api.search.brave.com/)")
 		os.Exit(1)
 	}
 
@@ -130,7 +136,7 @@ func BraveAsk(question string) {
 		},
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "brave ask: marshal request: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai ask: marshal request: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -141,14 +147,18 @@ func BraveAsk(question string) {
 
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "brave ask: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai ask: brave answers request failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: check network connectivity to api.search.brave.com")
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
-		fmt.Fprintf(os.Stderr, "brave ask %d: %s\n", resp.StatusCode, strutil.TruncateStr(string(respBody), 200))
+		fmt.Fprintf(os.Stderr, "qai ask: brave answers returned HTTP %d: %s\n", resp.StatusCode, strutil.TruncateStr(string(respBody), 200))
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			fmt.Fprintln(os.Stderr, "  → fix: verify BRAVE_SEARCH_API_KEY (or BRAVE_ANSWERS_API_KEY) at https://api.search.brave.com/app/dashboard")
+		}
 		os.Exit(1)
 	}
 
@@ -165,7 +175,7 @@ func BraveAsk(question string) {
 		} `json:"citations"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		fmt.Fprintf(os.Stderr, "brave ask: parse response: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai ask: parse brave answers response: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -198,7 +208,8 @@ func BraveAsk(question string) {
 func BraveContext(query string) {
 	key := os.Getenv("BRAVE_SEARCH_API_KEY")
 	if key == "" {
-		fmt.Fprintln(os.Stderr, "BRAVE_SEARCH_API_KEY not set")
+		fmt.Fprintln(os.Stderr, "qai context: BRAVE_SEARCH_API_KEY not set")
+		fmt.Fprintln(os.Stderr, "  → fix: export BRAVE_SEARCH_API_KEY=<key>  (get one at https://api.search.brave.com/)")
 		os.Exit(1)
 	}
 
@@ -209,14 +220,18 @@ func BraveContext(query string) {
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "brave context: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai context: brave llm/context request failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: check network connectivity to api.search.brave.com")
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
-		fmt.Fprintf(os.Stderr, "brave context %d: %s\n", resp.StatusCode, strutil.TruncateStr(string(body), 200))
+		fmt.Fprintf(os.Stderr, "qai context: brave llm/context returned HTTP %d: %s\n", resp.StatusCode, strutil.TruncateStr(string(body), 200))
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			fmt.Fprintln(os.Stderr, "  → fix: verify BRAVE_SEARCH_API_KEY at https://api.search.brave.com/app/dashboard")
+		}
 		os.Exit(1)
 	}
 
@@ -238,7 +253,8 @@ func JoplinSearch(query string, limit int) {
 		joplinURL = "http://localhost:41184"
 	}
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "JOPLIN_TOKEN not set (Joplin Web Clipper API token)")
+		fmt.Fprintln(os.Stderr, "qai search --joplin: JOPLIN_TOKEN not set")
+		fmt.Fprintln(os.Stderr, "  → fix: enable the Joplin Web Clipper (Tools → Options → Web Clipper) and export JOPLIN_TOKEN=<token>")
 		os.Exit(1)
 	}
 	if limit <= 0 {
@@ -259,14 +275,18 @@ func JoplinSearch(query string, limit int) {
 
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(joplinURL + "/search?" + params.Encode())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "joplin search: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai search --joplin: cannot reach Joplin at %s: %v\n", joplinURL, err)
+		fmt.Fprintln(os.Stderr, "  → fix: launch Joplin and enable the Web Clipper service (Tools → Options → Web Clipper)")
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
-		fmt.Fprintf(os.Stderr, "joplin search %d: %s\n", resp.StatusCode, strutil.TruncateStr(string(body), 200))
+		fmt.Fprintf(os.Stderr, "qai search --joplin: Joplin returned HTTP %d: %s\n", resp.StatusCode, strutil.TruncateStr(string(body), 200))
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			fmt.Fprintln(os.Stderr, "  → fix: verify JOPLIN_TOKEN matches the Web Clipper token shown in Tools → Options → Web Clipper")
+		}
 		os.Exit(1)
 	}
 
@@ -338,7 +358,8 @@ func joplinFolders(baseURL, token string) map[string]string {
 
 func CloudSurreal(query, provider string, limit int) {
 	if Cfg.Surreal.CloudURL == "" {
-		fmt.Fprintln(os.Stderr, "no cloud SurrealDB configured — run: qai init")
+		fmt.Fprintln(os.Stderr, "qai search --surreal: no cloud SurrealDB configured")
+		fmt.Fprintln(os.Stderr, "  → fix: run `qai init` or set SURREAL_CLOUD_URL / SURREAL_CLOUD_USER / SURREAL_CLOUD_PASS")
 		os.Exit(1)
 	}
 
@@ -352,10 +373,12 @@ func CloudSurreal(query, provider string, limit int) {
 	embs, err := embedding.Dispatch(Cfg, []string{query})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai search --surreal: embed failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  → fix: verify embeddings provider %q is reachable and configured (check QAI_API_KEY for qai-broker, or `gcloud auth application-default login` for Vertex)\n", Cfg.Embeddings.Provider)
 		os.Exit(1)
 	}
 	if len(embs) == 0 || len(embs[0]) == 0 {
-		fmt.Fprintln(os.Stderr, "qai search --surreal: empty embedding")
+		fmt.Fprintln(os.Stderr, "qai search --surreal: empty embedding returned from provider")
+		fmt.Fprintf(os.Stderr, "  → fix: check embeddings provider %q (%s) returned a non-empty vector\n", Cfg.Embeddings.Provider, Cfg.Embeddings.Model)
 		os.Exit(1)
 	}
 
@@ -381,7 +404,8 @@ func CloudSurreal(query, provider string, limit int) {
 
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai search --surreal: connection failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai search --surreal: cloud SurrealDB unreachable at %s: %v\n", conn.URL, err)
+		fmt.Fprintln(os.Stderr, "  → fix: verify SURREAL_CLOUD_URL / SURREAL_CLOUD_USER / SURREAL_CLOUD_PASS, or re-run `qai init`")
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
@@ -397,7 +421,8 @@ func CloudSurreal(query, provider string, limit int) {
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(body, &stmts); err != nil || len(stmts) == 0 {
-		fmt.Fprintf(os.Stderr, "qai search --surreal: parse error\n")
+		fmt.Fprintf(os.Stderr, "qai search --surreal: parse error from cloud SurrealDB at %s: %v\n", conn.URL, err)
+		fmt.Fprintf(os.Stderr, "  raw response: %s\n", strutil.TruncateStr(string(body), 200))
 		os.Exit(1)
 	}
 

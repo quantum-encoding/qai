@@ -286,6 +286,8 @@ func CmdBrowser(args []string) {
 		browserPDF(rest)
 	case "network", "net":
 		browserNetwork(rest)
+	case "audit":
+		browserAudit(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "qai browser: unknown action %q\n", action)
 		browserUsage()
@@ -1039,6 +1041,8 @@ Commands:
   qai browser pdf [-o file.pdf]           Print page to PDF
   qai browser network [--duration 5s]     Capture Network.* events (DevTools panel data)
                                           Flags: --summary, --filter, -o, --json
+  qai browser audit <url> [--duration 10s] One-shot: navigate + capture network/console/perf + screenshot
+                                          Flags: --summary, -o, --screenshot, --no-screenshot
   qai browser scrape <urls.csv>           Batch scrape — extract text from each URL
   qai browser scrape <urls.csv> --screenshot  Batch screenshot each URL
   qai browser scrape <urls.csv> --html    Batch extract HTML from each URL

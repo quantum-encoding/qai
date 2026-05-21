@@ -673,10 +673,17 @@ Models (positional or --model, aliases accepted):
   nano-banana-pro / gemini-pro / gemini-3-pro-image-preview
       Google Gemini 3 Pro Image — "Nano Banana Pro" (DEFAULT, strongest
       realistic output, best text rendering)
-  nano-banana-flash / gemini-flash / gemini-2.5-flash-image
-      Google Gemini 2.5 Flash Image — "Nano Banana" (faster, cheaper)
+  nano-banana-2 / gemini-flash-2 / gemini-3.1-flash-image-preview
+      Google Gemini 3.1 Flash Image — "Nano Banana 2" (newer flash,
+      between flash and pro on quality)
+  nano-banana / gemini-flash / gemini-2.5-flash-image
+      Google Gemini 2.5 Flash Image — "Nano Banana" (original; fast,
+      cheap)
   grok / grok-imagine / grok-imagine-image
-      xAI Grok Imagine (stylised, fast)
+      xAI Grok Imagine — standard (stylised, fast, ~$0.02/img)
+  grok-pro / grok-quality / grok-imagine-image-quality
+      xAI Grok Imagine Quality — higher resolution / quality
+      (~$0.05/img 1K, ~$0.07/img 2K)
   gpt / openai / gpt-image-1
       OpenAI GPT-Image
 

@@ -223,22 +223,53 @@ func conductChat(args []string) {
 // Whichever route the user takes — positional, --model flag, or the
 // registry id verbatim — resolves to the same canonical id sent to the
 // broker.
+//
+// The Nano Banana naming maps to the three Gemini image generations:
+//
+//	"nano banana"      = gemini-2.5-flash-image       (original)
+//	"nano banana 2"    = gemini-3.1-flash-image-preview (faster successor)
+//	"nano banana pro"  = gemini-3-pro-image-preview   (strongest realism)
+//
+// The xAI side has a standard and a quality variant:
+//
+//	"grok imagine"         = grok-imagine-image          ($0.02/img)
+//	"grok imagine quality" = grok-imagine-image-quality  ($0.05–0.07/img)
 var imageModelAliases = map[string]string{
-	// Gemini 3 Pro Image — "Nano Banana Pro". Default since 2026-05-02.
-	"nano-banana-pro":          "gemini-3-pro-image-preview",
-	"nano-banana":              "gemini-3-pro-image-preview",
-	"gemini-pro":               "gemini-3-pro-image-preview",
-	"gemini":                   "gemini-3-pro-image-preview",
+	// ── Gemini 3 Pro Image — "Nano Banana Pro" (DEFAULT) ─────────────
+	"nano-banana-pro":            "gemini-3-pro-image-preview",
+	"gemini-pro":                 "gemini-3-pro-image-preview",
+	"gemini":                     "gemini-3-pro-image-preview",
 	"gemini-3-pro-image-preview": "gemini-3-pro-image-preview",
-	// Gemini 2.5 Flash Image — "Nano Banana" (the original)
+
+	// ── Gemini 3.1 Flash Image Preview — "Nano Banana 2" ─────────────
+	"nano-banana-2":                  "gemini-3.1-flash-image-preview",
+	"gemini-flash-2":                 "gemini-3.1-flash-image-preview",
+	"gemini-3.1-flash-image-preview": "gemini-3.1-flash-image-preview",
+
+	// ── Gemini 2.5 Flash Image — "Nano Banana" (the original) ────────
+	"nano-banana":            "gemini-2.5-flash-image",
 	"nano-banana-flash":      "gemini-2.5-flash-image",
 	"gemini-flash":           "gemini-2.5-flash-image",
 	"gemini-2.5-flash-image": "gemini-2.5-flash-image",
-	// xAI Grok Imagine
+
+	// ── xAI Grok Imagine — standard ──────────────────────────────────
 	"grok":               "grok-imagine-image",
 	"grok-imagine":       "grok-imagine-image",
 	"grok-imagine-image": "grok-imagine-image",
-	// OpenAI GPT-Image
+
+	// ── xAI Grok Imagine Quality — higher-res / better quality ───────
+	// Official aliases (all four hit the same model server-side):
+	//   grok-imagine-image-quality, grok-imagine-image-quality-latest,
+	//   grok-imagine-image-quality-20260403, grok-imagine-image-pro
+	"grok-quality":                      "grok-imagine-image-quality",
+	"grok-imagine-quality":              "grok-imagine-image-quality",
+	"grok-pro":                          "grok-imagine-image-quality",
+	"grok-imagine-pro":                  "grok-imagine-image-quality",
+	"grok-imagine-image-pro":            "grok-imagine-image-quality",
+	"grok-imagine-image-quality":        "grok-imagine-image-quality",
+	"grok-imagine-image-quality-latest": "grok-imagine-image-quality",
+
+	// ── OpenAI GPT-Image ─────────────────────────────────────────────
 	"gpt":         "gpt-image-1",
 	"openai":      "gpt-image-1",
 	"gpt-image-1": "gpt-image-1",

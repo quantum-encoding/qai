@@ -53,6 +53,7 @@ type options struct {
 	sessions   int
 	days       int
 	budgetCh   int
+	perNoteCh  int // explicit per-note cap; 0 = derive from budget
 	full       bool
 	noTodos    bool
 	sessionID  string
@@ -157,6 +158,14 @@ func parseArgs(args []string) (options, error) {
 				return o, fmt.Errorf("bad --budget %q", args[i])
 			}
 			o.budgetCh = tok * 4 // 4 chars ≈ 1 token rough estimate
+		case "--chars-per-session":
+			if i+1 >= len(args) {
+				return o, fmt.Errorf("--chars-per-session requires N")
+			}
+			i++
+			if _, err := fmt.Sscanf(args[i], "%d", &o.perNoteCh); err != nil {
+				return o, fmt.Errorf("bad --chars-per-session %q", args[i])
+			}
 		case "--full":
 			o.full = true
 		case "--no-todos":
@@ -294,6 +303,33 @@ func collectTodos(client *joplin.Client, basename string) []joplin.Note {
 	return out
 }
 
+// resolvePerNoteCap decides how many chars of body to render per note.
+// Three knobs feed it:
+//
+//	--full              → no cap (render the whole body)
+//	--chars-per-session → explicit cap, used verbatim
+//	otherwise           → budgetCh / sessionCount, floored at 200
+//
+// Floor avoids the degenerate "5 sessions of 60 chars each because
+// the budget was small". 200 is roughly the typical first paragraph;
+// the user can always go higher with --chars-per-session or --budget.
+func resolvePerNoteCap(opts options, n int) int {
+	if opts.full {
+		return 1 << 30 // effectively unlimited
+	}
+	if opts.perNoteCh > 0 {
+		return opts.perNoteCh
+	}
+	if n <= 0 {
+		return opts.budgetCh
+	}
+	cap := opts.budgetCh / n
+	if cap < 200 {
+		cap = 200
+	}
+	return cap
+}
+
 // hydrateBodies fills in the Body field on each note via GetNote.
 // joplin.ListNotes returns notes without bodies (the /folders/<id>/notes
 // endpoint's default field set excludes body); recall needs them for the
@@ -357,23 +393,12 @@ func renderMarkdown(sessions, todos []joplin.Note, project string, opts options)
 		fmt.Println()
 	}
 
-	// Budget-aware truncation: trim each body to a per-note cap that
-	// keeps the total under opts.budgetCh.
-	perNoteCap := opts.budgetCh
-	if !opts.full && len(sessions) > 0 {
-		perNoteCap = opts.budgetCh / len(sessions)
-		if perNoteCap < 200 {
-			perNoteCap = 200
-		}
-	}
+	perNoteCap := resolvePerNoteCap(opts, len(sessions))
 
 	for _, n := range sessions {
 		ts := formatTime(n.UserUpdatedTime)
 		fmt.Printf("## %s — %s\n", ts, strings.TrimSpace(n.Title))
-		body := strings.TrimSpace(n.Body)
-		if !opts.full {
-			body = firstParagraphOrTrunc(body, perNoteCap)
-		}
+		body := firstParagraphOrTrunc(strings.TrimSpace(n.Body), perNoteCap)
 		if body != "" {
 			fmt.Println(body)
 		}
@@ -421,18 +446,9 @@ type todoRecord struct {
 
 func renderJSON(sessions, todos []joplin.Note, project string, opts options) {
 	out := recallJSON{Project: project, Days: opts.days}
-	perNoteCap := opts.budgetCh
-	if !opts.full && len(sessions) > 0 {
-		perNoteCap = opts.budgetCh / len(sessions)
-		if perNoteCap < 200 {
-			perNoteCap = 200
-		}
-	}
+	perNoteCap := resolvePerNoteCap(opts, len(sessions))
 	for _, n := range sessions {
-		body := strings.TrimSpace(n.Body)
-		if !opts.full {
-			body = firstParagraphOrTrunc(body, perNoteCap)
-		}
+		body := firstParagraphOrTrunc(strings.TrimSpace(n.Body), perNoteCap)
 		out.Sessions = append(out.Sessions, sessionRecord{
 			ID:    n.ID,
 			Title: strings.TrimSpace(n.Title),
@@ -474,18 +490,41 @@ func printSingleNote(client *joplin.Client, id string, asJSON bool) {
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
+// firstParagraphOrTrunc returns up to maxChars of usable body, ending
+// at a clean boundary. The earlier "first paragraph or truncate"
+// heuristic was too aggressive — a 50-char opening paragraph stayed
+// 50 chars even when --budget allowed 1200, so --budget appeared to
+// have no effect on preview density.
+//
+// New rule:
+//
+//	body fits in maxChars        → return the whole body
+//	body longer than maxChars    → cut at the LAST paragraph break
+//	                                below the cap (keeps content
+//	                                whole-paragraph-shaped). Falls
+//	                                back to a word boundary if no
+//	                                paragraph break sits in the
+//	                                upper half of the window.
+//
+// Net effect: --budget actually scales preview content the way the
+// help text claims it does.
 func firstParagraphOrTrunc(body string, maxChars int) string {
-	body = skipYAMLFrontmatter(body)
-	// First paragraph = up to first double newline.
-	if idx := strings.Index(body, "\n\n"); idx > 0 && idx < maxChars {
-		return strings.TrimSpace(body[:idx])
-	}
+	body = strings.TrimSpace(skipYAMLFrontmatter(body))
 	if len(body) <= maxChars {
 		return body
 	}
-	// Try to cut at a word boundary.
+	window := body[:maxChars]
+	// Prefer a paragraph boundary in the upper half of the window so
+	// the preview keeps multiple paragraphs when they fit cleanly.
+	if idx := strings.LastIndex(window, "\n\n"); idx > maxChars/2 {
+		return strings.TrimSpace(window[:idx])
+	}
+	// Otherwise step back to the nearest word boundary.
 	cut := maxChars
-	for cut > maxChars-20 && cut < len(body) && body[cut] != ' ' && body[cut] != '\n' {
+	for cut > maxChars-20 && cut > 0 {
+		if body[cut] == ' ' || body[cut] == '\n' {
+			break
+		}
 		cut--
 	}
 	if cut <= 0 {
@@ -590,16 +629,24 @@ hook) plus the global qai/sessions / qai/todos filtered by the cwd
 basename. Cross-project access is opt-in.
 
 USAGE
-  qai recall                       Briefing for the current project
-  qai recall --project <name>      Specific project by basename
-  qai recall --project '*'         All projects (cross-project firehose)
-  qai recall --sessions N          Override session count
-  qai recall --days N              Override time window
-  qai recall --budget N            Override token budget
-  qai recall --full                Full bodies, no truncation
-  qai recall --no-todos            Skip the open-todos section
-  qai recall --session <id>        Print one specific note's full body
-  qai recall --json                Machine-readable (for hooks + scripts)
+  qai recall                              Briefing for the current project
+  qai recall --project <name>             Specific project by basename
+  qai recall --project '*'                All projects (cross-project firehose)
+  qai recall --sessions N                 Override session count (default 5)
+  qai recall --days N                     Override time window (default 14)
+  qai recall --budget N                   Token budget; per-note cap = budget/sessions (default 1500)
+  qai recall --chars-per-session N        Explicit per-note char cap (overrides --budget math)
+  qai recall --full                       Full bodies, no truncation (can be large)
+  qai recall --no-todos                   Skip the open-todos section
+  qai recall --session <id>               Print one specific note's full body
+  qai recall --json                       Machine-readable (for hooks + scripts)
+
+PREVIEW SIZING
+  Three knobs trade context size against detail:
+    --budget 1500 (default)               ~1500 tokens total ≈ 300 chars per note across 5 sessions
+    --budget 6000                         ~6000 tokens total ≈ 1200 chars per note (denser previews)
+    --chars-per-session 2000              Always render up to 2000 chars per session, regardless of budget
+    --full                                No truncation (use for one session; can blow context across N)
 
 EXAMPLES
   qai recall                       Default briefing (markdown)

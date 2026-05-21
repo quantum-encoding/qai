@@ -63,8 +63,11 @@ func main() {
 	recall.Cfg = cfg
 
 	if len(os.Args) < 2 {
+		// Bare `qai` should print help to stdout and exit 0 — printing
+		// help is a successful invocation, not a failure. Previously
+		// exited 1, which broke pipe-friendly uses like `qai | head`.
 		printUsage()
-		os.Exit(1)
+		return
 	}
 
 	cmd := os.Args[1]
@@ -152,7 +155,7 @@ func main() {
 	case "models":
 		cmdModels(args)
 	case "cheat":
-		fmt.Println(cheatSheet)
+		os.Stdout.WriteString(cheatSheet)
 	case "plugins":
 		cmdPlugins(args)
 	case "conduct", "c":
@@ -783,6 +786,8 @@ Search & Knowledge:
   clip      Clip a web page to Joplin
   scrape    Pluggable product scraper (Amazon + presets, batch from CSV)
   ingest    Embed + store docs in SurrealDB
+  note      Save a session summary (qai/sessions) or user TODO (qai/todos) to Joplin
+  recall    Read recent session notes + open TODOs (read-side of note)
 
 Code:
   analyze   Compiler-accurate code analysis (Go, Rust, TS, Python, Swift, Kotlin)
@@ -799,8 +804,6 @@ System:
   conduct   Multi-model API gateway (low-level access)
   project   Joplin-backed projects (list/create/set/show/notes)
   agent     Joplin-backed skills / agent profiles / instructions store
-  note      Save a session summary or user TODO to Joplin
-  recall    Read recent session notes + open TODOs (read-side of note)
   doctor    Health-check every dependency qai talks to
   cheat     One-screen quickref of common usage across commands
   plugins   List qai-* plugins on PATH

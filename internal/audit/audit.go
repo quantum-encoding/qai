@@ -282,7 +282,8 @@ Profiles are loaded from:
 			if i+1 < len(args) {
 				key, p, err := loadProfileFromFile(args[i+1])
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "load profile file: %v\n", err)
+					fmt.Fprintf(os.Stderr, "qai audit: load profile file %s: %v\n", args[i+1], err)
+					fmt.Fprintln(os.Stderr, "  -> fix: pass a readable YAML file with name/description/system/user fields (see ~/.qai/profiles/ for examples)")
 					os.Exit(1)
 				}
 				profileName = key
@@ -303,7 +304,8 @@ Profiles are loaded from:
 		var names []string
 		for n := range profiles { names = append(names, n) }
 		sort.Strings(names)
-		fmt.Fprintf(os.Stderr, "unknown profile %q (available: %s)\n", profileName, strings.Join(names, ", "))
+		fmt.Fprintf(os.Stderr, "qai audit: unknown profile %q\n", profileName)
+		fmt.Fprintf(os.Stderr, "  -> fix: pass --profile <name> with one of: %s (or drop a YAML into ~/.qai/profiles/)\n", strings.Join(names, ", "))
 		os.Exit(1)
 	}
 
@@ -395,7 +397,8 @@ Profiles are loaded from:
 	// Real run.
 	apiKey := Cfg.API.APIKey
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "\nAPI key not configured — run: qai init")
+		fmt.Fprintln(os.Stderr, "\nqai audit: QAI_API_KEY not configured")
+		fmt.Fprintln(os.Stderr, "  -> fix: run `qai init`, or export QAI_API_KEY=<key> (get one at https://quantumencoding.ai)")
 		os.Exit(1)
 	}
 

@@ -31,10 +31,16 @@ var profiles map[string]auditProfile
 func init() {
 	profiles = make(map[string]auditProfile)
 
-	// Layer 1: embedded defaults.
+	// Layer 1: embedded defaults. These are baked into the binary; any
+	// failure here means the binary itself is broken (corrupt embed FS
+	// or a YAML file that got corrupted at build time) — there's nothing
+	// the user can fix at runtime, so we abort with a clear stderr note
+	// instead of panicking with a stack trace.
 	entries, err := fs.ReadDir(profilesFS, "profiles")
 	if err != nil {
-		panic("embedded profiles dir missing: " + err.Error())
+		fmt.Fprintf(os.Stderr, "qai audit: embedded profiles dir missing: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  -> fix: this is a build defect; rebuild qai from a clean checkout (go build ./cmd/qai)")
+		os.Exit(1)
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
@@ -42,11 +48,15 @@ func init() {
 		}
 		data, err := profilesFS.ReadFile("profiles/" + e.Name())
 		if err != nil {
-			panic("read embedded profile " + e.Name() + ": " + err.Error())
+			fmt.Fprintf(os.Stderr, "qai audit: read embedded profile %s: %v\n", e.Name(), err)
+			fmt.Fprintln(os.Stderr, "  -> fix: this is a build defect; rebuild qai from a clean checkout")
+			os.Exit(1)
 		}
 		var p auditProfile
 		if err := yaml.Unmarshal(data, &p); err != nil {
-			panic("parse profile " + e.Name() + ": " + err.Error())
+			fmt.Fprintf(os.Stderr, "qai audit: parse embedded profile %s: %v\n", e.Name(), err)
+			fmt.Fprintln(os.Stderr, "  -> fix: this is a build defect; rebuild qai from a clean checkout")
+			os.Exit(1)
 		}
 		key := strings.TrimSuffix(e.Name(), ".yaml")
 		profiles[key] = p

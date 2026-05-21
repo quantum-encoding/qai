@@ -94,7 +94,7 @@ func findPane(name string) (string, error) {
 	out, err := tmuxRun("list-panes", "-s", "-t", session,
 		"-F", "#{pane_id}\t#{pane_title}\t#{pane_current_command}\t#{pane_current_path}")
 	if err != nil {
-		return "", fmt.Errorf("no tmux session %q", session)
+		return "", fmt.Errorf("no tmux session %q (probe with `tmux ls`; set TERMINAL_MCP_SESSION to override the session name)", session)
 	}
 
 	type pane struct{ id, title, cmd, path string }
@@ -136,7 +136,7 @@ func findPane(name string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("pane %q not found", name)
+	return "", fmt.Errorf("pane %q not found in tmux session %q (list active panes with `qai term list` or `tmux list-panes -s -t %s`)", name, session, session)
 }
 
 func capturePane(paneID string, lines int) string {
@@ -219,7 +219,8 @@ func termSpawn(args []string) {
 	}
 	paneID, err := tmuxRun(splitArgs...)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai term: failed to create pane: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai term: split-window in session %q failed: %v\n", session, err)
+		fmt.Fprintln(os.Stderr, "  -> fix: is tmux running? probe with `tmux ls`. Start a server with `tmux new-session -d -s mcp-terminals` (or set TERMINAL_MCP_SESSION to an existing session).")
 		os.Exit(1)
 	}
 	paneID = strings.TrimSpace(paneID)
@@ -466,7 +467,8 @@ func termWait(args []string) {
 		time.Sleep(time.Second)
 	}
 
-	fmt.Fprintln(os.Stderr, "timeout")
+	fmt.Fprintf(os.Stderr, "qai term: timed out after %ds waiting for %q in pane %q\n", timeout, pattern, args[0])
+	fmt.Fprintln(os.Stderr, "  -> fix: raise --timeout, broaden the pattern, or read the pane with `qai term read \"<name>\"` to see what's there")
 	os.Exit(1)
 }
 

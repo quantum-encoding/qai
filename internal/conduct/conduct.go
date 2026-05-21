@@ -218,24 +218,69 @@ func conductChat(args []string) {
 
 // ── Image ───────────────────────────────────────────────────────────────────
 
+// imageModelAliases maps human-friendly names (and shorthand) to the
+// canonical API model id. Lookup is case-insensitive on the alias side.
+// Whichever route the user takes — positional, --model flag, or the
+// registry id verbatim — resolves to the same canonical id sent to the
+// broker.
+var imageModelAliases = map[string]string{
+	// Gemini 3 Pro Image — "Nano Banana Pro". Default since 2026-05-02.
+	"nano-banana-pro":          "gemini-3-pro-image-preview",
+	"nano-banana":              "gemini-3-pro-image-preview",
+	"gemini-pro":               "gemini-3-pro-image-preview",
+	"gemini":                   "gemini-3-pro-image-preview",
+	"gemini-3-pro-image-preview": "gemini-3-pro-image-preview",
+	// Gemini 2.5 Flash Image — "Nano Banana" (the original)
+	"nano-banana-flash":      "gemini-2.5-flash-image",
+	"gemini-flash":           "gemini-2.5-flash-image",
+	"gemini-2.5-flash-image": "gemini-2.5-flash-image",
+	// xAI Grok Imagine
+	"grok":               "grok-imagine-image",
+	"grok-imagine":       "grok-imagine-image",
+	"grok-imagine-image": "grok-imagine-image",
+	// OpenAI GPT-Image
+	"gpt":         "gpt-image-1",
+	"openai":      "gpt-image-1",
+	"gpt-image-1": "gpt-image-1",
+}
+
+func resolveImageModel(alias string) string {
+	if canonical, ok := imageModelAliases[strings.ToLower(strings.TrimSpace(alias))]; ok {
+		return canonical
+	}
+	// Unknown id — pass through verbatim so the broker can reject it
+	// with a useful error. Avoids silently swallowing new model ids.
+	return alias
+}
+
 func conductImage(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: qai conduct image \"prompt\" [--model M] [--count N] [--aspect 16:9] [--size WxH]")
+		fmt.Fprintln(os.Stderr, "usage: qai conduct image \"prompt\" [model] [--count N] [--aspect 16:9] [--size WxH]")
 		os.Exit(1)
 	}
 
-	body := map[string]any{"prompt": args[0], "model": "grok-imagine-image", "count": 1}
+	// Default: Gemini 3 Pro Image (Nano Banana Pro). Strongest realistic
+	// output of the three providers wired here.
+	body := map[string]any{"prompt": args[0], "model": "gemini-3-pro-image-preview", "count": 1}
 
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--model":
-			if i+1 < len(args) { body["model"] = args[i+1]; i++ }
+			if i+1 < len(args) { body["model"] = resolveImageModel(args[i+1]); i++ }
 		case "--count":
 			if i+1 < len(args) { body["count"] = parseIntArg(args[i+1]); i++ }
 		case "--aspect":
 			if i+1 < len(args) { body["aspect_ratio"] = args[i+1]; i++ }
 		case "--size":
 			if i+1 < len(args) { body["size"] = args[i+1]; i++ }
+		default:
+			// Positional model: first non-flag, non-flag-value arg after
+			// the prompt. Previously silently dropped — now resolved
+			// through the alias map so "nano-banana-pro" and the like
+			// route to the canonical id.
+			if !strings.HasPrefix(args[i], "-") {
+				body["model"] = resolveImageModel(args[i])
+			}
 		}
 	}
 

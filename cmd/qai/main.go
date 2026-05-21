@@ -16,6 +16,7 @@ import (
 	"github.com/quantum-encoding/qai-cli/internal/agent"
 	"github.com/quantum-encoding/qai-cli/internal/analyze"
 	"github.com/quantum-encoding/qai-cli/internal/audit"
+	"github.com/quantum-encoding/qai-cli/internal/blast"
 	"github.com/quantum-encoding/qai-cli/internal/browser"
 	"github.com/quantum-encoding/qai-cli/internal/compile"
 	"github.com/quantum-encoding/qai-cli/internal/conduct"
@@ -23,6 +24,7 @@ import (
 	"github.com/quantum-encoding/qai-cli/internal/db"
 	"github.com/quantum-encoding/qai-cli/internal/fleet"
 	"github.com/quantum-encoding/qai-cli/internal/graph"
+	"github.com/quantum-encoding/qai-cli/internal/i18n"
 	"github.com/quantum-encoding/qai-cli/internal/ingest"
 	"github.com/quantum-encoding/qai-cli/internal/initcmd"
 	"github.com/quantum-encoding/qai-cli/internal/note"
@@ -128,6 +130,10 @@ func main() {
 		browser.CmdBrowser(args) // handles its own --help
 	case "db":
 		db.CmdDB(args) // handles its own --help
+	case "blast", "br":
+		blast.Cmd(args) // handles its own --help
+	case "i18n":
+		i18n.Cmd(args) // handles its own --help
 	case "clip":
 		cmdClip(args)
 	case "scrape":
@@ -661,15 +667,21 @@ Plugins (` + pluginDir + `):
 const helpImage = `qai image — generate an image
 
 Usage:
-  qai image "prompt" [provider] [flags]
+  qai image "prompt" [model] [flags]
 
-Providers (via 'qai image "prompt" <provider>' — routed through conduct):
-  grok-imagine-image        xAI Grok Imagine (default)
-  gpt-image-1               OpenAI GPT-Image
-  gemini-2.5-flash-image    Google Gemini 2.5 Flash Image
+Models (positional or --model, aliases accepted):
+  nano-banana-pro / gemini-pro / gemini-3-pro-image-preview
+      Google Gemini 3 Pro Image — "Nano Banana Pro" (DEFAULT, strongest
+      realistic output, best text rendering)
+  nano-banana-flash / gemini-flash / gemini-2.5-flash-image
+      Google Gemini 2.5 Flash Image — "Nano Banana" (faster, cheaper)
+  grok / grok-imagine / grok-imagine-image
+      xAI Grok Imagine (stylised, fast)
+  gpt / openai / gpt-image-1
+      OpenAI GPT-Image
 
 Flags:
-  --model <id>       Override model id
+  --model <id>       Override model id (aliases above also accepted here)
   --count <n>        Number of images (default 1)
   --aspect <ratio>   Aspect ratio, e.g. 16:9
   --size <WxH>       Explicit pixel size, e.g. 1024x1024
@@ -678,9 +690,10 @@ Output:
   Images saved to ~/Pictures/generated/ (paths printed to stdout).
 
 Examples:
-  qai image "a lighthouse at dusk"
+  qai image "a lighthouse at dusk"                       # uses Nano Banana Pro
   qai image "isometric cityscape" --aspect 16:9 --count 4
-  qai image "logo sketch" --model gpt-image-1
+  qai image "logo sketch" gpt                            # OpenAI via alias
+  qai image "punchy thumbnail" nano-banana-pro --aspect 16:9
 
 Related:
   qai edit    — edit an existing image (single or batch)

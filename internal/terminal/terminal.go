@@ -90,6 +90,15 @@ func cleanName(s string) string {
 }
 
 func findPane(name string) (string, error) {
+	// Direct tmux pane id pass-through. `%N` is tmux's canonical id
+	// syntax — when the caller already has one (e.g. from
+	// `tmux list-panes`, panes.json, or a fleet recovery flow), there
+	// is no point doing a list-and-match round-trip. Returns the id
+	// verbatim so every `qai term <verb> <pane>` accepts ids.
+	if strings.HasPrefix(name, "%") && len(name) > 1 {
+		return name, nil
+	}
+
 	session := tmuxSession()
 	out, err := tmuxRun("list-panes", "-s", "-t", session,
 		"-F", "#{pane_id}\t#{pane_title}\t#{pane_current_command}\t#{pane_current_path}")

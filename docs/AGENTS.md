@@ -275,10 +275,11 @@ qai term close <name> [--force]
 
 ## Things to fix (open followups)
 
-- `qai term send` doesn't accept tmux pane ids (`%4`); only names. Use
-  `tmux send-keys` directly when you need to address a pane by id
-  (e.g. for fleet recovery). Worth fixing in `internal/terminal/ops.go`
-  to route `%`-prefixed args straight to the tmux call.
+- ~~`qai term send` doesn't accept tmux pane ids (`%4`)~~. Fixed —
+  `findPane` now passes through any name starting with `%` directly
+  to tmux, so every `qai term <verb> <pane>` command takes either a
+  name or a tmux pane id. Useful during fleet recovery when only the
+  id is known.
 - `qai security` has two known failure modes — both uncovered during
   the 15-pane Rust mission. (a) **Rate-limit collapse at fleet scale**:
   the underlying `rust-security-detector` queries NVD + GitHub

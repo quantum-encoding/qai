@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/quantum-encoding/qai-cli/internal/config"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/quantum-encoding/qai-cli/internal/config"
 )
 
 // Cfg is set by main before any command runs.
@@ -217,6 +219,14 @@ func dieAPI(err error) {
 	os.Exit(1)
 }
 
+// saveSeq is incremented under a mutex to disambiguate concurrent
+// saves that land in the same wall-clock second. Without it, parallel
+// image-batch generations stomp each other's filenames.
+var (
+	saveMu  sync.Mutex
+	saveSeq uint64
+)
+
 func saveBase64(b64, dir, ext string) string {
 	data, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
@@ -229,8 +239,27 @@ func saveBase64(b64, dir, ext string) string {
 	}
 	outDir := filepath.Join(config.Home, dir)
 	os.MkdirAll(outDir, 0755)
-	name := time.Now().Format("20060102-150405") + ext
+
+	// Resolve a non-colliding filename even under parallel calls in
+	// the same wall-clock second. Lock the counter, then probe for an
+	// unused name — both the second-resolution timestamp and a
+	// per-process sequence number combine to avoid the
+	// 20260521-163347.png + 20260521-163347.png collision that
+	// `qai image --batch --parallel N` produced before.
+	saveMu.Lock()
+	defer saveMu.Unlock()
+
+	base := time.Now().Format("20060102-150405")
+	name := base + ext
 	path := filepath.Join(outDir, name)
+	for {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			break
+		}
+		saveSeq++
+		name = fmt.Sprintf("%s-%d%s", base, saveSeq, ext)
+		path = filepath.Join(outDir, name)
+	}
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to save %s: %v\n", path, err)
 		return ""
@@ -362,15 +391,36 @@ func resolveImageModel(alias string) string {
 func conductImage(args []string) {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "usage: qai conduct image \"prompt\" [model] [--count N] [--aspect 16:9] [--size WxH]")
+		fmt.Fprintln(os.Stderr, "       qai conduct image --batch <file> [--parallel N] [model] [--aspect ...] [--size ...]")
 		os.Exit(1)
 	}
 
 	// Default: Gemini 3 Pro Image (Nano Banana Pro). Strongest realistic
 	// output of the three providers wired here.
-	body := map[string]any{"prompt": args[0], "model": "gemini-3-pro-image-preview", "count": 1}
+	body := map[string]any{"model": "gemini-3-pro-image-preview", "count": 1}
 
-	for i := 1; i < len(args); i++ {
+	// Two-pass parse: detect --batch first (changes the prompt source),
+	// then process all other flags. The first positional that isn't a
+	// flag value becomes the prompt in non-batch mode, or is treated as
+	// a model alias if it doesn't look like a prompt sentence.
+	var batchPath string
+	parallel := 4
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--batch" && i+1 < len(args) {
+			batchPath = args[i+1]
+		}
+	}
+
+	gotPrompt := false
+	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--batch":
+			i++ // consume value (already captured above)
+		case "--parallel":
+			if i+1 < len(args) {
+				parallel = parseIntArg(args[i+1])
+				i++
+			}
 		case "--model":
 			if i+1 < len(args) { body["model"] = resolveImageModel(args[i+1]); i++ }
 		case "--count":
@@ -380,14 +430,30 @@ func conductImage(args []string) {
 		case "--size":
 			if i+1 < len(args) { body["size"] = args[i+1]; i++ }
 		default:
-			// Positional model: first non-flag, non-flag-value arg after
-			// the prompt. Previously silently dropped — now resolved
-			// through the alias map so "nano-banana-pro" and the like
-			// route to the canonical id.
-			if !strings.HasPrefix(args[i], "-") {
+			if strings.HasPrefix(args[i], "-") {
+				continue // unknown flag — pass through silently
+			}
+			// First positional: prompt (only when not in batch mode).
+			// Subsequent positionals: model alias.
+			if batchPath == "" && !gotPrompt {
+				body["prompt"] = args[i]
+				gotPrompt = true
+			} else {
 				body["model"] = resolveImageModel(args[i])
 			}
 		}
+	}
+
+	// Batch mode: prompts come from a file, body is the template.
+	if batchPath != "" {
+		runImageBatch(batchPath, parallel, body)
+		return
+	}
+
+	if !gotPrompt {
+		fmt.Fprintln(os.Stderr, "qai image: prompt required (or pass --batch <file>)")
+		fmt.Fprintln(os.Stderr, "  → fix: qai image \"your prompt here\"  or  qai image --batch prompts.txt")
+		os.Exit(1)
 	}
 
 	data, err := qaiAPI("POST", "/qai/v1/images/generate", body)

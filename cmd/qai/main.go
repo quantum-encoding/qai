@@ -702,6 +702,9 @@ Flags:
   --count <n>        Number of images (default 1)
   --aspect <ratio>   Aspect ratio, e.g. 16:9
   --size <WxH>       Explicit pixel size, e.g. 1024x1024
+  --batch <file>     Generate from a file of prompts (one per line; '-' for stdin).
+                     Same --model/--aspect/--size apply to every prompt.
+  --parallel <n>     With --batch, number of concurrent generations (default 4).
 
 Output:
   Images saved to ~/Pictures/generated/ (paths printed to stdout).
@@ -711,6 +714,9 @@ Examples:
   qai image "isometric cityscape" --aspect 16:9 --count 4
   qai image "logo sketch" gpt                            # OpenAI via alias
   qai image "punchy thumbnail" nano-banana-pro --aspect 16:9
+  qai image --batch prompts.txt --aspect 16:9            # 10 prompts, one file
+  qai image --batch - --parallel 2 < prompts.txt          # stdin, 2-wide
+  printf "a fox\\na koi pond\\na zen rock garden\\n" | qai image --batch -
 
 Related:
   qai edit    — edit an existing image (single or batch)

@@ -83,12 +83,31 @@ type noteList struct {
 
 // ── Basic probes ────────────────────────────────────────────────────────────
 
-// Ping checks that Joplin's web clipper service is reachable. It returns a
-// descriptive error when the endpoint isn't the expected JoplinClipperServer,
-// which usually means the port is taken by something else.
+// Ping checks that Joplin's web clipper service is reachable. The error
+// it returns is hand-tuned for the three failure modes callers actually
+// hit, because each one needs a different fix:
+//
+//   - connection refused → Joplin desktop isn't running. Launch it.
+//   - timeout            → Joplin desktop IS running but the Web Clipper
+//                          Service is disabled in Tools → Options.
+//                          The port is bound by Joplin but no HTTP is
+//                          being served on /ping.
+//   - wrong response     → something else is on the port (rare).
+//
+// The diagnostic text in each branch is what `qai recall`, `qai note`,
+// and `qai doctor` print to the user; keep it actionable.
 func (c *Client) Ping() error {
 	resp, err := c.hc.Get(c.cfg.BaseURL + "/ping")
 	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "connection refused"):
+			return fmt.Errorf("Joplin desktop is not running (no listener on %s)", c.cfg.BaseURL)
+		case strings.Contains(msg, "deadline exceeded"),
+			strings.Contains(msg, "i/o timeout"),
+			strings.Contains(msg, "Client.Timeout"):
+			return fmt.Errorf("Joplin is running at %s but Web Clipper Service is disabled — enable it in Tools → Options → Web Clipper", c.cfg.BaseURL)
+		}
 		return fmt.Errorf("joplin ping: %w", err)
 	}
 	defer resp.Body.Close()
@@ -97,7 +116,7 @@ func (c *Client) Ping() error {
 		return fmt.Errorf("joplin ping: HTTP %d: %s", resp.StatusCode, truncate(string(body), 120))
 	}
 	if !strings.Contains(string(body), "JoplinClipperServer") {
-		return fmt.Errorf("joplin ping: unexpected response %q (is something else on this port?)", truncate(string(body), 80))
+		return fmt.Errorf("joplin ping: %s answered but it isn't Joplin's clipper (response: %q)", c.cfg.BaseURL, truncate(string(body), 80))
 	}
 	return nil
 }

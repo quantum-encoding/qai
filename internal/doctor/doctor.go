@@ -173,11 +173,23 @@ func checkJoplin() result {
 	}
 	c := joplin.New(joplin.Config{BaseURL: Cfg.Joplin.BaseURL, Token: Cfg.Joplin.Token})
 	if err := c.Ping(); err != nil {
+		// Ping() now returns a hand-tuned message per failure mode, so
+		// just surface it. The fix line is the specific action that
+		// resolves THIS error (not a generic "launch Joplin + enable
+		// clipper" that's wrong half the time).
+		errMsg := err.Error()
+		fix := "launch Joplin desktop and enable Web Clipper (Tools → Options → Web Clipper)"
+		switch {
+		case strings.Contains(errMsg, "is not running"):
+			fix = "launch Joplin desktop"
+		case strings.Contains(errMsg, "Web Clipper Service is disabled"):
+			fix = "in Joplin desktop, open Tools → Options → Web Clipper and toggle 'Enable Web Clipper Service'"
+		}
 		return result{
 			name:   "joplin",
 			state:  statusBroken,
-			detail: fmt.Sprintf("token set but clipper unreachable: %v", err),
-			fix:    "launch Joplin desktop and enable Web Clipper (Tools → Options → Web Clipper)",
+			detail: errMsg,
+			fix:    fix,
 		}
 	}
 	base := Cfg.Joplin.BaseURL

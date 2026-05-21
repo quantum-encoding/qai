@@ -271,6 +271,15 @@ func checkTmux() result {
 	}
 }
 
+// rmCmd returns "trash" if it's on PATH, else "rm". Lets fix hints
+// respect the user's safer-delete tool when available.
+func rmCmd() string {
+	if _, err := exec.LookPath("trash"); err == nil {
+		return "trash"
+	}
+	return "rm"
+}
+
 func checkFleet() result {
 	home, _ := os.UserHomeDir()
 	activeFile := filepath.Join(home, ".qai", "fleet", "active")
@@ -290,7 +299,7 @@ func checkFleet() result {
 			name:   "fleet",
 			state:  statusBroken,
 			detail: fmt.Sprintf("active=%s but architect-pane file missing", fleetID),
-			fix:    fmt.Sprintf("rm ~/.qai/fleet/active  (or run a fresh `qai fleet up`)"),
+			fix:    fmt.Sprintf("%s ~/.qai/fleet/active  (or run a fresh `qai fleet up`)", rmCmd()),
 		}
 	}
 	archPane := strings.TrimSpace(string(archData))
@@ -302,7 +311,7 @@ func checkFleet() result {
 			name:   "fleet",
 			state:  statusBroken,
 			detail: fmt.Sprintf("active=%s but tmux unreachable", fleetID),
-			fix:    "start tmux, or run `rm ~/.qai/fleet/active` to clear stale state",
+			fix:    fmt.Sprintf("start tmux, or run `%s ~/.qai/fleet/active` to clear stale state", rmCmd()),
 		}
 	}
 	alive := false
@@ -317,7 +326,7 @@ func checkFleet() result {
 			name:   "fleet",
 			state:  statusBroken,
 			detail: fmt.Sprintf("active=%s recorded but pane %s is dead", fleetID, archPane),
-			fix:    fmt.Sprintf("rm ~/.qai/fleet/active  (stale pointer from a previous tmux session)"),
+			fix:    fmt.Sprintf("%s ~/.qai/fleet/active  (stale pointer from a previous tmux session)", rmCmd()),
 		}
 	}
 	return result{

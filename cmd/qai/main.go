@@ -667,7 +667,7 @@ System
   qai models [filter]                       # model registry lookup
   qai token --check                         # GCP ADC status
   qai cheat                                 # this view
-  qai plugins                               # list ~/.local/bin/qai-* plugins
+  qai plugins                               # list ~/.qai/commands/qai-* plugins
 
 Workflow tips
   - Auth: ONE QAI_API_KEY unlocks media/search/audit (https://quantumencoding.ai)
@@ -675,11 +675,11 @@ Workflow tips
   - Brave/GCP/Surreal: optional per-feature credentials, see qai doctor
 `
 
-// cmdPlugins handles 'qai plugins [list]' — lists qai-* executables on
-// PATH. Plugins are how qai picks up third-party verbs (drop an
-// executable named qai-foo on PATH; qai foo runs it). Without this
-// command, agents had no way to discover what plugins are installed
-// short of scanning the filesystem manually.
+// cmdPlugins handles 'qai plugins [list]' — lists qai-* executables in
+// the sanctioned plugin directory (pluginDir = ~/.qai/commands/). This
+// matches what dispatch (tryPlugin) actually resolves: anything outside
+// pluginDir is not invocable as 'qai <verb>', so listing it would be
+// misleading.
 func cmdPlugins(args []string) {
 	for _, a := range args {
 		if a == "--help" || a == "-h" {
@@ -687,39 +687,28 @@ func cmdPlugins(args []string) {
 			return
 		}
 	}
-	// Scan every directory on PATH for executables named "qai-*".
-	pathDirs := strings.Split(os.Getenv("PATH"), string(os.PathListSeparator))
-	seen := map[string]string{} // name → first-resolved path (PATH precedence)
-	for _, dir := range pathDirs {
-		if dir == "" {
+	entries, err := os.ReadDir(pluginDir)
+	if err != nil || len(entries) == 0 {
+		fmt.Printf("(no qai-* plugins in %s)\n", pluginDir)
+		fmt.Printf("Drop an executable named qai-<verb> in %s to add a subcommand.\n", pluginDir)
+		return
+	}
+	seen := map[string]string{}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "qai-") || e.IsDir() {
 			continue
 		}
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
+		info, err := e.Info()
+		if err != nil || info.Mode()&0o111 == 0 {
+			continue // not executable
 		}
-		for _, e := range entries {
-			name := e.Name()
-			if !strings.HasPrefix(name, "qai-") {
-				continue
-			}
-			if e.IsDir() {
-				continue
-			}
-			full := filepath.Join(dir, name)
-			info, err := e.Info()
-			if err != nil || info.Mode()&0o111 == 0 {
-				continue // not executable
-			}
-			short := strings.TrimPrefix(name, "qai-")
-			if _, ok := seen[short]; !ok {
-				seen[short] = full
-			}
-		}
+		short := strings.TrimPrefix(name, "qai-")
+		seen[short] = filepath.Join(pluginDir, name)
 	}
 	if len(seen) == 0 {
-		fmt.Println("(no qai-* plugins on PATH)")
-		fmt.Println("Drop an executable named qai-<verb> on $PATH to add a subcommand.")
+		fmt.Printf("(no qai-* plugins in %s)\n", pluginDir)
+		fmt.Printf("Drop an executable named qai-<verb> in %s to add a subcommand.\n", pluginDir)
 		return
 	}
 	names := make([]string, 0, len(seen))
@@ -732,19 +721,20 @@ func cmdPlugins(args []string) {
 	}
 }
 
-const helpPlugins = `qai plugins — list third-party qai-* plugins on PATH
+const helpPlugins = `qai plugins — list third-party qai-* plugins
 
 Plugins are an extension mechanism: any executable named qai-<verb>
-on $PATH is invocable as 'qai <verb>'. This command surfaces what's
-installed so agents (and humans) don't have to grep the filesystem.
+in ~/.qai/commands/ is invocable as 'qai <verb>'. This command
+surfaces what's installed so agents (and humans) don't have to grep
+the filesystem.
 
 USAGE
   qai plugins             List installed plugins
   qai plugins --help      This help
 
 HOW TO ADD A PLUGIN
-  Drop an executable named qai-<verb> anywhere on your $PATH. e.g.:
-    install -m 755 /path/to/qai-deploy ~/.local/bin/
+  Drop an executable named qai-<verb> in ~/.qai/commands/. e.g.:
+    install -m 755 /path/to/qai-deploy ~/.qai/commands/
     qai deploy           # now works`
 
 // ─── exec helpers ───────────────────────────────────────────────────────────

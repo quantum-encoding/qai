@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -211,6 +212,79 @@ func (c *cdpClient) recv(id int64, timeout time.Duration) (json.RawMessage, erro
 		}
 		return msg.Result, nil
 	}
+}
+
+// Capture collects every event whose Method matches one of the given
+// prefixes for the specified duration. Returns the collected events in
+// arrival order. Anything that doesn't match the prefixes is left in
+// the client's event buffer so subsequent WaitEvent calls can still
+// see it.
+//
+// Caller is expected to have already issued the corresponding
+// `<Domain>.enable` Calls — Capture is purely an event drain, not a
+// domain initialiser. (Done this way so the caller can enable multiple
+// domains and capture them together.)
+//
+// Usage:
+//
+//	c.Call("Network.enable", nil, 5*time.Second)
+//	events := c.Capture([]string{"Network."}, 5*time.Second)
+func (c *cdpClient) Capture(acceptPrefixes []string, duration time.Duration) []cdpEvent {
+	matches := func(method string) bool {
+		for _, p := range acceptPrefixes {
+			if strings.HasPrefix(method, p) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// First, drain anything already buffered that matches.
+	var collected, remaining []cdpEvent
+	for _, ev := range c.events {
+		if matches(ev.Method) {
+			collected = append(collected, ev)
+		} else {
+			remaining = append(remaining, ev)
+		}
+	}
+	c.events = remaining
+
+	// Then read from the wire for `duration`, collecting matches and
+	// re-buffering everything else. ReadDeadline expiry is how we exit
+	// the loop — it's expected, not an error.
+	deadline := time.Now().Add(duration)
+	for {
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			break
+		}
+		_ = c.conn.SetReadDeadline(time.Now().Add(rem))
+		_, raw, err := c.conn.ReadMessage()
+		if err != nil {
+			// Most common cause is the read deadline firing; that's
+			// the loop's normal exit condition.
+			break
+		}
+		var msg cdpMessage
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			continue
+		}
+		if msg.ID != nil {
+			// Late response to an earlier Call — nothing to do here.
+			continue
+		}
+		if msg.Method == "" {
+			continue
+		}
+		ev := cdpEvent{Method: msg.Method, Params: msg.Params}
+		if matches(msg.Method) {
+			collected = append(collected, ev)
+		} else {
+			c.events = append(c.events, ev)
+		}
+	}
+	return collected
 }
 
 // WaitEvent waits for a CDP event by method name (e.g. "Page.loadEventFired").

@@ -24,14 +24,16 @@ import (
 //	qai scrape --csv t.csv -o briefs.jsonl --parallel 3
 func runScout(searchURL string, preset *Preset, opts *flags) {
 	if preset.Scout == nil {
-		fmt.Fprintf(os.Stderr, "qai scrape: preset %q doesn't support scout mode\n", preset.Name)
+		fmt.Fprintf(os.Stderr, "qai scrape --scout: preset %q has no Scout extractor\n", preset.Name)
+		fmt.Fprintln(os.Stderr, "  → fix: use a preset whose site exposes listing pages (e.g. amazon), or scrape product URLs directly")
 		os.Exit(1)
 	}
 
 	fmt.Fprintf(os.Stderr, "▶ [%s] scouting %s\n", preset.Name, searchURL)
 	body, err := fetchHTML(searchURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai scrape: fetch failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai scrape --scout: fetch %s failed: %v\n", searchURL, err)
+		fmt.Fprintln(os.Stderr, "  → fix: check the URL opens in a browser; some sites geo-block or require a UA the scout fetcher can't fake")
 		os.Exit(1)
 	}
 
@@ -48,7 +50,8 @@ func runScout(searchURL string, preset *Preset, opts *flags) {
 	} else {
 		f, err := os.Create(opts.outPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "qai scrape: create %s: %v\n", opts.outPath, err)
+			fmt.Fprintf(os.Stderr, "qai scrape --scout: cannot create output file %s: %v\n", opts.outPath, err)
+			fmt.Fprintln(os.Stderr, "  → fix: pick a writable path; the parent directory must already exist")
 			os.Exit(1)
 		}
 		defer f.Close()
@@ -61,7 +64,8 @@ func runScout(searchURL string, preset *Preset, opts *flags) {
 	}
 	w.Flush()
 	if err := w.Error(); err != nil {
-		fmt.Fprintf(os.Stderr, "qai scrape: write csv: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai scrape --scout: write CSV to %s: %v\n", firstNonEmpty(opts.outPath, "stdout"), err)
+		fmt.Fprintln(os.Stderr, "  → fix: check disk space and that the output file is still writable")
 		os.Exit(1)
 	}
 

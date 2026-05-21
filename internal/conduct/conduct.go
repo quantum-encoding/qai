@@ -83,9 +83,36 @@ func CmdConduct(args []string) {
 
 // ── HTTP helper ─────────────────────────────────────────────────────────────
 
+// apiError is a sentinel-flavoured error so dieAPI can decide whether the
+// blame is on the user's environment (no key, no network) vs. the broker
+// (4xx/5xx with a response body worth surfacing).
+type apiError struct {
+	kind    string // "auth", "network", "broker", "decode"
+	status  int    // HTTP status for broker errors; 0 otherwise
+	method  string
+	path    string
+	body    string // truncated response body for broker errors
+	wrapped error  // underlying error for network/decode
+}
+
+func (e *apiError) Error() string {
+	switch e.kind {
+	case "auth":
+		return "QAI_API_KEY not set"
+	case "network":
+		return fmt.Sprintf("network error talking to %s %s: %v", e.method, qaiBase()+e.path, e.wrapped)
+	case "broker":
+		return fmt.Sprintf("broker %d on %s %s: %s", e.status, e.method, e.path, e.body)
+	case "decode":
+		return fmt.Sprintf("could not read broker response from %s %s: %v", e.method, e.path, e.wrapped)
+	default:
+		return e.wrapped.Error()
+	}
+}
+
 func qaiAPI(method, path string, body any) ([]byte, error) {
 	if qaiKey() == "" {
-		return nil, fmt.Errorf("QAI_API_KEY not set")
+		return nil, &apiError{kind: "auth", method: method, path: path}
 	}
 
 	var reqBody io.Reader
@@ -110,17 +137,27 @@ func qaiAPI(method, path string, body any) ([]byte, error) {
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &apiError{kind: "network", method: method, path: path, wrapped: err}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, &apiError{kind: "decode", method: method, path: path, wrapped: err}
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API %d: %s", resp.StatusCode, string(respBody))
+		bodyStr := strings.TrimSpace(string(respBody))
+		if len(bodyStr) > 800 {
+			bodyStr = bodyStr[:800] + "...(truncated)"
+		}
+		return nil, &apiError{
+			kind:   "broker",
+			status: resp.StatusCode,
+			method: method,
+			path:   path,
+			body:   bodyStr,
+		}
 	}
 
 	return respBody, nil
@@ -137,8 +174,46 @@ func printJSON(data []byte) {
 	}
 }
 
+// dieAPI prints a structured failure message and exits. The message
+// distinguishes qai-side problems (missing API key, no network) from
+// broker-side ones (HTTP 4xx/5xx with the body the broker returned), so
+// the user knows whether to fix their environment or their request.
 func dieAPI(err error) {
-	fmt.Fprintf(os.Stderr, "qai conduct: %v\n", err)
+	if ae, ok := err.(*apiError); ok {
+		switch ae.kind {
+		case "auth":
+			fmt.Fprintln(os.Stderr, "qai conduct: QAI_API_KEY not set")
+			fmt.Fprintln(os.Stderr, "  → fix: export QAI_API_KEY=<key>  (get one at https://quantumencoding.ai)")
+		case "network":
+			fmt.Fprintf(os.Stderr, "qai conduct: cannot reach broker at %s\n", qaiBase())
+			fmt.Fprintf(os.Stderr, "  detail: %v\n", ae.wrapped)
+			fmt.Fprintln(os.Stderr, "  → fix: check connectivity and QAI_BASE_URL (defaults to the public broker)")
+		case "decode":
+			fmt.Fprintf(os.Stderr, "qai conduct: broker reply unreadable on %s %s: %v\n", ae.method, ae.path, ae.wrapped)
+			fmt.Fprintln(os.Stderr, "  → fix: retry; if it persists this is a broker-side outage")
+		case "broker":
+			fmt.Fprintf(os.Stderr, "qai conduct: broker returned HTTP %d on %s %s\n", ae.status, ae.method, ae.path)
+			if ae.body != "" {
+				fmt.Fprintf(os.Stderr, "  broker said: %s\n", ae.body)
+			}
+			switch {
+			case ae.status == 401 || ae.status == 403:
+				fmt.Fprintln(os.Stderr, "  → fix: this is an auth error from the broker. Check QAI_API_KEY is valid and not revoked.")
+			case ae.status == 402:
+				fmt.Fprintln(os.Stderr, "  → fix: out of credits. Top up at https://quantumencoding.ai or run `qai conduct balance`.")
+			case ae.status == 404:
+				fmt.Fprintln(os.Stderr, "  → fix: route or model id unknown to the broker. List options with `qai conduct models`.")
+			case ae.status == 429:
+				fmt.Fprintln(os.Stderr, "  → fix: provider rate limit. Retry after a short delay, or lower --parallel.")
+			case ae.status >= 500:
+				fmt.Fprintln(os.Stderr, "  → fix: broker-side error. Retry; if it persists check provider status.")
+			}
+		default:
+			fmt.Fprintf(os.Stderr, "qai conduct: %v\n", err)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "qai conduct: %v\n", err)
+	}
 	os.Exit(1)
 }
 
@@ -355,7 +430,8 @@ func conductImageEdit(args []string) {
 
 	imgData, err := os.ReadFile(args[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai conduct: cannot read %s: %v\n", args[0], err)
+		fmt.Fprintf(os.Stderr, "qai conduct image-edit: cannot read input image %s: %v\n", args[0], err)
+		fmt.Fprintln(os.Stderr, "  → fix: pass a path to a real PNG/JPG file as the first argument")
 		os.Exit(1)
 	}
 
@@ -468,7 +544,8 @@ func conductTranscribe(args []string) {
 
 	audioData, err := os.ReadFile(args[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai conduct: cannot read %s: %v\n", args[0], err)
+		fmt.Fprintf(os.Stderr, "qai conduct transcribe: cannot read audio file %s: %v\n", args[0], err)
+		fmt.Fprintln(os.Stderr, "  → fix: pass a path to a real audio file (mp3, wav, m4a) as the first argument")
 		os.Exit(1)
 	}
 
@@ -533,7 +610,8 @@ func conductCloneVoice(args []string) {
 
 	audioData, err := os.ReadFile(args[1])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai conduct: cannot read %s: %v\n", args[1], err)
+		fmt.Fprintf(os.Stderr, "qai conduct clone-voice: cannot read voice sample %s: %v\n", args[1], err)
+		fmt.Fprintln(os.Stderr, "  → fix: pass a real audio file (mp3/wav, ~30s of clean speech) as the second argument")
 		os.Exit(1)
 	}
 

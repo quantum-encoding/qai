@@ -29,8 +29,8 @@ func CmdScrape(args []string) {
 	}
 
 	if opts.target == "" {
-		fmt.Fprintln(os.Stderr, "qai scrape: missing <url>, --id, or --csv")
-		fmt.Fprintln(os.Stderr, "Run 'qai scrape --help' for usage.")
+		fmt.Fprintln(os.Stderr, "qai scrape: missing target — need one of <url>, --id <id>, or --csv <path>")
+		fmt.Fprintln(os.Stderr, "  → fix: run `qai scrape --help` for the full usage")
 		os.Exit(1)
 	}
 
@@ -46,13 +46,15 @@ func CmdScrape(args []string) {
 
 	productURL, preset, err := resolveTarget(opts)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai scrape: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai scrape: cannot resolve target %q: %v\n", opts.target, err)
+		fmt.Fprintln(os.Stderr, "  → fix: pass --preset <name> or use a URL whose host matches a registered preset")
 		os.Exit(1)
 	}
 
 	brief, err := runOne(productURL, preset, opts)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai scrape: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai scrape: pipeline failed for %s: %v\n", productURL, err)
+		fmt.Fprintln(os.Stderr, "  → fix: confirm Joplin Desktop is running with Web Clipper enabled and JOPLIN_TOKEN/Joplin settings.json reachable")
 		os.Exit(1)
 	}
 	emit(brief, opts)
@@ -65,15 +67,16 @@ func resolveScoutPreset(opts *flags, searchURL string) *Preset {
 	if opts.preset != "" {
 		p := PresetByName(opts.preset)
 		if p == nil {
-			fmt.Fprintf(os.Stderr, "qai scrape: unknown preset %q (available: %s)\n",
-				opts.preset, strings.Join(PresetNames(), ", "))
+			fmt.Fprintf(os.Stderr, "qai scrape --scout: unknown preset %q\n", opts.preset)
+			fmt.Fprintf(os.Stderr, "  → fix: pick one of: %s\n", strings.Join(PresetNames(), ", "))
 			return nil
 		}
 		return p
 	}
 	p := PresetForURL(searchURL)
 	if p == nil {
-		fmt.Fprintf(os.Stderr, "qai scrape: no preset matches %s — pass --preset <name>\n", searchURL)
+		fmt.Fprintf(os.Stderr, "qai scrape --scout: no preset matches host of %s\n", searchURL)
+		fmt.Fprintf(os.Stderr, "  → fix: pass --preset <name> explicitly (registered: %s)\n", strings.Join(PresetNames(), ", "))
 		return nil
 	}
 	return p

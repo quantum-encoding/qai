@@ -54,7 +54,8 @@ func CmdEditBatch(args []string) {
 			if i+1 < len(args) {
 				n, err := strconv.Atoi(args[i+1])
 				if err != nil || n < 1 {
-					fmt.Fprintln(os.Stderr, "qai edit --batch: --parallel requires positive integer")
+					fmt.Fprintf(os.Stderr, "qai edit --batch: --parallel got %q, want a positive integer\n", args[i+1])
+					fmt.Fprintln(os.Stderr, "  → fix: e.g. --parallel 4")
 					os.Exit(1)
 				}
 				parallel = n
@@ -89,6 +90,7 @@ func CmdEditBatch(args []string) {
 	}
 
 	if len(positional) < 3 {
+		fmt.Fprintf(os.Stderr, "qai edit --batch: need 3 positional args (prompt, input-dir, output-dir); got %d\n", len(positional))
 		editBatchUsage()
 		os.Exit(1)
 	}
@@ -97,17 +99,20 @@ func CmdEditBatch(args []string) {
 	outputDir = positional[2]
 
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "qai edit --batch: mkdir output: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai edit --batch: cannot create output dir %s: %v\n", outputDir, err)
+		fmt.Fprintln(os.Stderr, "  → fix: pick a writable path or check parent dir permissions")
 		os.Exit(1)
 	}
 
 	images, err := listImages(inputDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai edit --batch: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai edit --batch: cannot read input dir %s: %v\n", inputDir, err)
+		fmt.Fprintln(os.Stderr, "  → fix: pass an existing directory containing .png/.jpg/.jpeg/.webp files")
 		os.Exit(1)
 	}
 	if len(images) == 0 {
-		fmt.Fprintf(os.Stderr, "qai edit --batch: no images in %s\n", inputDir)
+		fmt.Fprintf(os.Stderr, "qai edit --batch: no images found in %s\n", inputDir)
+		fmt.Fprintln(os.Stderr, "  → fix: only .png/.jpg/.jpeg/.webp are scanned; check the directory contents")
 		os.Exit(1)
 	}
 
@@ -183,6 +188,8 @@ func runParallelEdits(prompt string, images []string, outDir string, workers int
 	}
 	fmt.Fprintf(os.Stderr, "Done. %d succeeded, %d failed.\n", done, failed)
 	if failed > 0 {
+		fmt.Fprintln(os.Stderr, "qai edit --batch: one or more edits failed (see [FAIL] lines above)")
+		fmt.Fprintln(os.Stderr, "  → fix: retry failed inputs individually with `qai edit <file> \"prompt\"`")
 		os.Exit(1)
 	}
 }
@@ -255,17 +262,20 @@ func editOne(prompt, imagePath, outDir, model, provider string) (string, error) 
 func runVertexBatchEdit(prompt string, images []string, outDir, model, bucket, region string) {
 	project := Cfg.Vertex.Project
 	if project == "" {
-		fmt.Fprintln(os.Stderr, "qai edit --batch: vertex.project not configured (run qai init)")
+		fmt.Fprintln(os.Stderr, "qai edit --batch: vertex.project not configured")
+		fmt.Fprintln(os.Stderr, "  → fix: run `qai init` to set vertex.project, or pass --parallel N for the live-API path instead")
 		os.Exit(1)
 	}
 	if bucket == "" {
-		fmt.Fprintln(os.Stderr, "qai edit --batch: need --gcs-bucket or vertex.bucket in config")
+		fmt.Fprintln(os.Stderr, "qai edit --batch: GCS bucket not set")
+		fmt.Fprintln(os.Stderr, "  → fix: pass --gcs-bucket <name>, or set vertex.bucket in ~/.config/qai/config.toml")
 		os.Exit(1)
 	}
 
 	tok, err := getVertexToken()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai edit --batch: auth: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai edit --batch: GCP auth failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: run `gcloud auth application-default login`, or check that ADC is valid with `qai token --check`")
 		os.Exit(1)
 	}
 
@@ -279,31 +289,36 @@ func runVertexBatchEdit(prompt string, images []string, outDir, model, bucket, r
 
 	jsonlBuf, keys, err := buildBatchJSONL(prompt, images)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai edit --batch: build jsonl: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai edit --batch: build JSONL request body: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: one of the input images is unreadable; check the [FAIL] line above for which one")
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "Built JSONL: %d requests, %d bytes\n", len(images), jsonlBuf.Len())
 
 	if err := gcsUpload(tok, bucket, inputObj, "application/jsonl", jsonlBuf.Bytes()); err != nil {
-		fmt.Fprintf(os.Stderr, "qai edit --batch: upload jsonl: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai edit --batch: upload JSONL to gs://%s/%s: %v\n", bucket, inputObj, err)
+		fmt.Fprintln(os.Stderr, "  → fix: ensure the bucket exists in the right region and your ADC has storage.objects.create on it")
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "Uploaded gs://%s/%s\n", bucket, inputObj)
 
 	jobName, err := submitVertexBatchJob(tok, project, region, model, bucket, inputObj, outputPrefix, ts)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai edit --batch: submit job: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai edit --batch: submit Vertex batch job: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: confirm the model id is valid for batchPredictionJobs in this region, and ADC has aiplatform.batchPredictionJobs.create")
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "Submitted job: %s\n", jobName)
 
 	state, outDir2, err := pollVertexBatchJob(tok, jobName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai edit --batch: poll: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai edit --batch: poll Vertex job %s: %v\n", jobName, err)
+		fmt.Fprintf(os.Stderr, "  → fix: inspect the job in the console or with `gcloud ai batch-prediction-jobs describe %s`\n", jobName)
 		os.Exit(1)
 	}
 	if state != "JOB_STATE_SUCCEEDED" {
-		fmt.Fprintf(os.Stderr, "qai edit --batch: job ended in state %s\n", state)
+		fmt.Fprintf(os.Stderr, "qai edit --batch: Vertex job %s ended in state %s\n", jobName, state)
+		fmt.Fprintln(os.Stderr, "  → fix: see the `error:` line above for the broker's reason; re-run with corrected inputs or model")
 		os.Exit(1)
 	}
 	fmt.Fprintf(os.Stderr, "Job succeeded. Output: %s\n", outDir2)
@@ -312,7 +327,8 @@ func runVertexBatchEdit(prompt string, images []string, outDir, model, bucket, r
 		outDir2 = fmt.Sprintf("gs://%s/%s", bucket, outputPrefix)
 	}
 	if err := downloadBatchResults(tok, outDir2, outDir, keys); err != nil {
-		fmt.Fprintf(os.Stderr, "qai edit --batch: download results: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai edit --batch: download results from %s: %v\n", outDir2, err)
+		fmt.Fprintln(os.Stderr, "  → fix: the job succeeded but pulling predictions failed — re-run download with the gs:// path above")
 		os.Exit(1)
 	}
 }

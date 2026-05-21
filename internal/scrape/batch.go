@@ -35,11 +35,13 @@ type csvRow struct {
 func runBatch(opts *flags) {
 	rows, err := readCSV(opts.csvPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai scrape: read %s: %v\n", opts.csvPath, err)
+		fmt.Fprintf(os.Stderr, "qai scrape --csv: cannot read %s: %v\n", opts.csvPath, err)
+		fmt.Fprintln(os.Stderr, "  → fix: pass a path to a real CSV; columns are url[,preset[,notebook]] (header row optional)")
 		os.Exit(1)
 	}
 	if len(rows) == 0 {
-		fmt.Fprintf(os.Stderr, "qai scrape: %s has no rows\n", opts.csvPath)
+		fmt.Fprintf(os.Stderr, "qai scrape --csv: %s has no usable rows\n", opts.csvPath)
+		fmt.Fprintln(os.Stderr, "  → fix: each non-blank, non-`#` line needs a URL in the first column")
 		os.Exit(1)
 	}
 

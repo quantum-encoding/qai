@@ -36,11 +36,12 @@ func cdpListTabs(port int) ([]cdpTab, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("cannot connect to browser on localhost:%d\n\n"+
-			"Launch your browser with remote debugging:\n"+
-			"  Chrome:  open -a \"Google Chrome\" --args --remote-debugging-port=%d\n"+
-			"  Brave:   open -a \"Brave Browser\" --args --remote-debugging-port=%d\n\n"+
-			"Or set a custom port: --port N or QAI_BROWSER_PORT=N",
+		return nil, fmt.Errorf("cannot connect to browser on localhost:%d (no debug port listening)\n"+
+			"  → fix: launch your browser with remote debugging, then retry:\n"+
+			"      Brave:   open -a \"Brave Browser\" --args --remote-debugging-port=%d\n"+
+			"      Chrome:  open -a \"Google Chrome\" --args --remote-debugging-port=%d\n"+
+			"      or:      qai browser launch\n"+
+			"    custom port: pass --port N, or set QAI_BROWSER_PORT=N",
 			port, port, port)
 	}
 	defer resp.Body.Close()

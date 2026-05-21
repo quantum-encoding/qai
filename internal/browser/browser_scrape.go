@@ -103,17 +103,20 @@ Options:
 
 	if csvPath == "" {
 		fmt.Fprintln(os.Stderr, "qai browser scrape: CSV file path required")
+		fmt.Fprintln(os.Stderr, "  → fix: qai browser scrape <urls.csv>   (first column = URL, optional second column = label)")
 		os.Exit(1)
 	}
 
 	// Read CSV
 	entries, err := readScrapeCSV(csvPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai browser scrape: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai browser scrape: read %s: %v\n", csvPath, err)
+		fmt.Fprintln(os.Stderr, "  → fix: ensure the file exists and is a valid CSV (first column = URL)")
 		os.Exit(1)
 	}
 	if len(entries) == 0 {
-		fmt.Fprintln(os.Stderr, "qai browser scrape: no URLs found in CSV")
+		fmt.Fprintf(os.Stderr, "qai browser scrape: no URLs found in %s\n", csvPath)
+		fmt.Fprintln(os.Stderr, "  → fix: first column must contain http:// or https:// URLs (header row 'url' is auto-skipped)")
 		os.Exit(1)
 	}
 
@@ -122,6 +125,7 @@ Options:
 	// rather than discovering it mid-run after dozens of navigations.
 	if err := preflightScrape(entries); err != nil {
 		fmt.Fprintf(os.Stderr, "qai browser scrape: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: edit ~/.qai/browser-policy.yaml to adjust denied_domains, or remove offending rows from the CSV")
 		os.Exit(1)
 	}
 
@@ -140,7 +144,7 @@ Options:
 	// Connect to browser
 	client, tab, err := connectToTab(args)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai browser: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai browser scrape: %v\n", err)
 		os.Exit(1)
 	}
 	defer client.Close()

@@ -29,6 +29,7 @@ func browserNetwork(args []string) {
 	opts, err := parseNetworkArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai browser network: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: run 'qai browser network --help' for flag syntax")
 		os.Exit(1)
 	}
 	if opts.help {
@@ -38,13 +39,14 @@ func browserNetwork(args []string) {
 
 	c, _, err := connectToTab(args)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai browser network: connect: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai browser network: %v\n", err)
 		os.Exit(1)
 	}
 	defer c.Close()
 
 	if _, err := c.Call("Network.enable", nil, 5*time.Second); err != nil {
-		fmt.Fprintf(os.Stderr, "qai browser network: Network.enable: %v\n", err)
+		fmt.Fprintf(os.Stderr, "qai browser network: Network.enable failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: the tab may have closed or navigated mid-call; rerun against a stable tab (--tab <id>)")
 		os.Exit(1)
 	}
 
@@ -62,7 +64,7 @@ func browserNetwork(args []string) {
 	} else {
 		b, err := json.MarshalIndent(requests, "", "  ")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "qai browser network: marshal: %v\n", err)
+			fmt.Fprintf(os.Stderr, "qai browser network: marshal JSON: %v\n", err)
 			os.Exit(1)
 		}
 		out = append(b, '\n')
@@ -71,6 +73,7 @@ func browserNetwork(args []string) {
 	if opts.outFile != "" {
 		if err := os.WriteFile(opts.outFile, out, 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "qai browser network: write %s: %v\n", opts.outFile, err)
+			fmt.Fprintln(os.Stderr, "  → fix: check the parent directory exists and is writable, or pass a different path with -o")
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stderr, "  → %s\n", opts.outFile)

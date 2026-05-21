@@ -92,7 +92,8 @@ func connectToTab(args []string) (*cdpClient, *cdpTab, error) {
 		}
 	}
 	if len(pages) == 0 {
-		return nil, nil, fmt.Errorf("no open browser tabs found")
+		return nil, nil, fmt.Errorf("browser is running on localhost:%d but has no open page tabs\n"+
+			"  → fix: open at least one tab in the browser, then retry", port)
 	}
 
 	// Select tab
@@ -107,13 +108,16 @@ func connectToTab(args []string) (*cdpClient, *cdpTab, error) {
 			}
 		}
 		if !found {
-			return nil, nil, fmt.Errorf("tab %q not found", wantID)
+			return nil, nil, fmt.Errorf("tab %q not found on localhost:%d\n"+
+				"  → fix: run 'qai browser list' to see open tab IDs, then pass --tab <id>",
+				wantID, port)
 		}
 	}
 
 	client, err := cdpConnect(target.WebSocketDebuggerURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("websocket dial to tab failed: %w\n"+
+			"  → fix: the tab may have closed mid-call. Run 'qai browser list' and retry", err)
 	}
 
 	// Enable page events
@@ -461,7 +465,8 @@ func browserList(args []string) {
 func browserOpen(args []string) {
 	clean := stripFlags(args)
 	if len(clean) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: qai browser open <url>")
+		fmt.Fprintln(os.Stderr, "qai browser open: missing URL")
+		fmt.Fprintln(os.Stderr, "  → fix: qai browser open <url>   (e.g. qai browser open https://example.com)")
 		os.Exit(1)
 	}
 	url := clean[0]
@@ -519,7 +524,8 @@ func browserOpen(args []string) {
 
 func browserTab(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: qai browser tab <id>")
+		fmt.Fprintln(os.Stderr, "qai browser tab: missing tab ID")
+		fmt.Fprintln(os.Stderr, "  → fix: qai browser tab <id>   (run 'qai browser list' for tab IDs; prefix match works)")
 		os.Exit(1)
 	}
 	port := browserPort(args)
@@ -541,14 +547,15 @@ func browserTab(args []string) {
 				os.Exit(1)
 			}
 			if err := cdpActivateTab(port, t.ID); err != nil {
-				fmt.Fprintf(os.Stderr, "qai browser: %v\n", err)
+				fmt.Fprintf(os.Stderr, "qai browser tab: activate %s: %v\n", t.ID[:12], err)
 				os.Exit(1)
 			}
 			fmt.Printf("activated: %s — %s\n", t.Title, t.URL)
 			return
 		}
 	}
-	fmt.Fprintf(os.Stderr, "qai browser: tab %q not found\n", tabID)
+	fmt.Fprintf(os.Stderr, "qai browser tab: %q not found among %d tab(s) on port %d\n", tabID, len(tabs), port)
+	fmt.Fprintln(os.Stderr, "  → fix: run 'qai browser list' to see current tab IDs (prefix match works)")
 	os.Exit(1)
 }
 
@@ -666,7 +673,9 @@ func browserClick(args []string) {
 
 	clean := stripFlags(args)
 	if len(clean) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: qai browser click <selector> or <x> <y>")
+		fmt.Fprintln(os.Stderr, "qai browser click: missing target")
+		fmt.Fprintln(os.Stderr, "  → fix: qai browser click <css-selector>   (e.g. 'button#submit')")
+		fmt.Fprintln(os.Stderr, "         qai browser click <x> <y>          (pixel coordinates)")
 		os.Exit(1)
 	}
 
@@ -728,7 +737,8 @@ func browserType(args []string) {
 
 	clean := stripFlags(args)
 	if len(clean) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: qai browser type \"text\"")
+		fmt.Fprintln(os.Stderr, "qai browser type: missing text")
+		fmt.Fprintln(os.Stderr, "  → fix: qai browser type \"text to type\"   (quote the text to keep it as one arg)")
 		os.Exit(1)
 	}
 	text := clean[0]
@@ -766,7 +776,8 @@ func browserEval(args []string) {
 
 	clean := stripFlags(args)
 	if len(clean) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: qai browser eval \"js expression\"")
+		fmt.Fprintln(os.Stderr, "qai browser eval: missing JS expression")
+		fmt.Fprintln(os.Stderr, "  → fix: qai browser eval \"document.title\"   (quote the expression)")
 		os.Exit(1)
 	}
 	expr := clean[0]
@@ -819,7 +830,8 @@ func browserWait(args []string) {
 
 	clean := stripFlags(args)
 	if len(clean) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: qai browser wait <selector> [timeout_seconds]")
+		fmt.Fprintln(os.Stderr, "qai browser wait: missing CSS selector")
+		fmt.Fprintln(os.Stderr, "  → fix: qai browser wait <css-selector> [timeout_seconds]   (default 10s)")
 		os.Exit(1)
 	}
 	sel := clean[0]
@@ -839,7 +851,8 @@ func browserWait(args []string) {
 
 	for {
 		if time.Now().After(deadline) {
-			fmt.Fprintf(os.Stderr, "qai browser: timeout waiting for %s\n", sel)
+			fmt.Fprintf(os.Stderr, "qai browser wait: timeout after %s waiting for selector %q\n", timeout, sel)
+			fmt.Fprintln(os.Stderr, "  → fix: increase timeout (e.g. 'qai browser wait <sel> 30'), or check the selector with 'qai browser eval \"document.querySelector(\\\"<sel>\\\")\"'")
 			os.Exit(1)
 		}
 
@@ -980,7 +993,8 @@ func browserClip(args []string) {
 	json.Unmarshal([]byte(evalResult.Result.Value), &page)
 
 	if page.URL == "" {
-		fmt.Fprintln(os.Stderr, "qai browser: could not get page URL")
+		fmt.Fprintln(os.Stderr, "qai browser clip: could not read current page URL (tab may be on chrome:// or about:blank)")
+		fmt.Fprintln(os.Stderr, "  → fix: navigate to a real http(s) page first ('qai browser open <url>'), then retry")
 		os.Exit(1)
 	}
 

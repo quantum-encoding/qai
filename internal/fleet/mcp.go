@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -539,9 +540,15 @@ func detectArchitectRole() (fleetID string, isArchitect bool) {
 
 // isDefiniteWorker returns true only when we can confidently identify
 // this process as a worker pane: there's an active fleet, we're inside
-// a tmux pane, and that pane isn't the architect. Anything ambiguous
-// (no fleet, no tmux env, etc.) returns false so we stay alive in case
-// we become the architect later in the session.
+// a tmux pane, that pane isn't the architect, AND the recorded
+// architect pane is actually alive (not stale from a previous tmux
+// session that's now dead).
+//
+// The last check is the difference between "I'm a worker" (correct)
+// and "the active-fleet pointer is stale and the architect pane id is
+// from a tmux server that no longer exists" (also returns isArch=false
+// from detectArchitectRole, but the semantics are different — stale
+// state should keep us alive, not exit).
 func isDefiniteWorker() bool {
 	if os.Getenv("TMUX_PANE") == "" {
 		return false
@@ -550,7 +557,43 @@ func isDefiniteWorker() bool {
 	if fleetID == "" {
 		return false
 	}
-	return !isArch
+	if isArch {
+		return false
+	}
+	// fleetID is set and we're not the architect — could be a real
+	// worker, or could be stale state. Verify the recorded architect
+	// pane is alive before treating ourselves as a worker.
+	if !architectPaneIsAlive(fleetID) {
+		dlogf("isDefiniteWorker: active fleet %s but recorded architect pane is dead — stale state, staying alive", fleetID)
+		return false
+	}
+	return true
+}
+
+// architectPaneIsAlive returns true if the recorded architect-pane id
+// for the given fleet appears in `tmux list-panes -a -F #{pane_id}`.
+// Returns false on any error (including tmux being unreachable) — when
+// in doubt, prefer "stay alive" over "exit as worker".
+func architectPaneIsAlive(fleetID string) bool {
+	archFile := filepath.Join(config.Home, ".qai", "fleet", fleetID, "architect-pane")
+	archData, err := os.ReadFile(archFile)
+	if err != nil {
+		return false
+	}
+	wantPane := strings.TrimSpace(string(archData))
+	if wantPane == "" {
+		return false
+	}
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_id}").Output()
+	if err != nil {
+		return false
+	}
+	for _, p := range strings.Fields(string(out)) {
+		if p == wantPane {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *mcpServer) activeFleet() (string, bool) {

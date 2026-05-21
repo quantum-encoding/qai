@@ -269,6 +269,14 @@ func Down(spec *Spec) error {
 			}
 		}
 	}
+	// Stop the notifier daemon and clear the active-fleet pointer so the
+	// next session starts clean. Stale pointers (recorded architect-pane
+	// from a tmux session that no longer exists) confused conductor MCP
+	// role-detection after every reboot — fix the disease at teardown.
+	_ = stopNotifier(fleetID)
+	if err := ClearActiveFleet(); err != nil {
+		failures = append(failures, fmt.Sprintf("clear active pointer: %v", err))
+	}
 	if len(failures) > 0 {
 		return fmt.Errorf("down: %s", strings.Join(failures, "; "))
 	}

@@ -226,6 +226,18 @@ func SetActiveFleet(fleetID string) error {
 	return os.WriteFile(activeFleetPath(), []byte(fleetID+"\n"), 0o600)
 }
 
+// ClearActiveFleet removes the ~/.qai/fleet/active pointer. Called from
+// Down() so subsequent sessions start with a clean slate rather than
+// inheriting a stale pointer to a torn-down fleet. Idempotent: missing
+// file is not an error.
+func ClearActiveFleet() error {
+	err := os.Remove(activeFleetPath())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 // activeFleetPath returns ~/.qai/fleet/active.
 func activeFleetPath() string {
 	// FleetDir("") returns ~/.qai/fleet/ (trailing slash via filepath.Join

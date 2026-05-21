@@ -22,6 +22,7 @@ import (
 	"github.com/quantum-encoding/qai-cli/internal/conduct"
 	"github.com/quantum-encoding/qai-cli/internal/config"
 	"github.com/quantum-encoding/qai-cli/internal/db"
+	"github.com/quantum-encoding/qai-cli/internal/doctor"
 	"github.com/quantum-encoding/qai-cli/internal/fleet"
 	"github.com/quantum-encoding/qai-cli/internal/graph"
 	"github.com/quantum-encoding/qai-cli/internal/i18n"
@@ -56,6 +57,7 @@ func main() {
 	project.Cfg = cfg
 	agent.Cfg = cfg
 	note.Cfg = cfg
+	doctor.Cfg = cfg
 
 	if len(os.Args) < 2 {
 		printUsage()
@@ -154,6 +156,8 @@ func main() {
 		agent.CmdAgent(args) // handles its own --help
 	case "note", "n":
 		note.CmdNote(args) // handles its own --help
+	case "doctor":
+		doctor.CmdDoctor(args) // handles its own --help
 	case "term", "terminal", "t":
 		terminal.CmdTerminal(args) // handles its own --help
 	case "fleet":
@@ -645,6 +649,7 @@ System:
   project   Joplin-backed projects (list/create/set/show/notes)
   agent     Joplin-backed skills / agent profiles / instructions store
   note      Save a session summary or user TODO to Joplin
+  doctor    Health-check every dependency qai talks to
   token     GCP token refresh / identity tokens
   models    Search model registry (pricing, context, IDs)
   init      Interactive first-time configuration wizard

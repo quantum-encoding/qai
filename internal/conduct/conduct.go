@@ -269,6 +269,73 @@ func saveBase64(b64, dir, ext string) string {
 
 // ── Chat ────────────────────────────────────────────────────────────────────
 
+// Chat is the public, programmatic entry point for /qai/v1/chat. Wraps
+// the same HTTP path the CLI uses so `qai chat` (and any internal caller)
+// can reuse the broker round-trip + response shape without duplicating the
+// auth/decode plumbing. system may be empty; maxTokens=0 means broker default.
+// Returns the assistant text on success, or a *apiError on failure.
+func Chat(model, system, message string, maxTokens int) (string, error) {
+	if model == "" {
+		return "", fmt.Errorf("model is required")
+	}
+	if message == "" {
+		return "", fmt.Errorf("message is required")
+	}
+	// Broker expects OpenAI-shape `messages: [{role, content}]`. System
+	// prompt goes in as the first message with role=system when provided.
+	msgs := make([]map[string]string, 0, 2)
+	if system != "" {
+		msgs = append(msgs, map[string]string{"role": "system", "content": system})
+	}
+	msgs = append(msgs, map[string]string{"role": "user", "content": message})
+	body := map[string]any{"model": model, "messages": msgs}
+	if maxTokens > 0 {
+		body["max_tokens"] = maxTokens
+	}
+	data, err := qaiAPI("POST", "/qai/v1/chat", body)
+	if err != nil {
+		return "", err
+	}
+	// Try common response shapes in order: OpenAI choices, top-level text,
+	// Anthropic content blocks. Fall back to raw bytes if none match.
+	var resp map[string]any
+	if json.Unmarshal(data, &resp) == nil {
+		if choices, ok := resp["choices"].([]any); ok && len(choices) > 0 {
+			if c0, ok := choices[0].(map[string]any); ok {
+				if msg, ok := c0["message"].(map[string]any); ok {
+					if content, ok := msg["content"].(string); ok {
+						return content, nil
+					}
+				}
+			}
+		}
+		if text, ok := resp["text"].(string); ok {
+			return text, nil
+		}
+		if text, ok := resp["response"].(string); ok {
+			return text, nil
+		}
+		// Broker's qai-shape: {cached, content: "<string>", model, usage}.
+		// Order matters — check string-typed content BEFORE the Anthropic
+		// content-array shape, since both use the same field name.
+		if text, ok := resp["content"].(string); ok {
+			return text, nil
+		}
+		if content, ok := resp["content"].([]any); ok && len(content) > 0 {
+			if c0, ok := content[0].(map[string]any); ok {
+				if text, ok := c0["text"].(string); ok {
+					return text, nil
+				}
+			}
+		}
+	}
+	return string(data), nil
+}
+
+// DieAPI is the exported counterpart to dieAPI so other packages that
+// call Chat() can render the same structured failure message.
+func DieAPI(err error) { dieAPI(err) }
+
 func conductChat(args []string) {
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: qai conduct chat <model> \"message\" [--system \"prompt\"] [--max-tokens N] [--temperature F]")
@@ -277,36 +344,69 @@ func conductChat(args []string) {
 
 	model := args[0]
 	message := args[1]
-	body := map[string]any{"model": model, "message": message}
+	system := ""
+	maxTokens := 0
+	var temperature float64
+	hasTemp := false
 
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
 		case "--system":
 			if i+1 < len(args) {
-				body["system_prompt"] = args[i+1]
+				system = args[i+1]
 				i++
 			}
 		case "--max-tokens":
 			if i+1 < len(args) {
-				body["max_tokens"] = parseIntArg(args[i+1])
+				maxTokens = parseIntArg(args[i+1])
 				i++
 			}
 		case "--temperature":
 			if i+1 < len(args) {
-				body["temperature"] = parseFloatArg(args[i+1])
+				temperature = parseFloatArg(args[i+1])
+				hasTemp = true
 				i++
 			}
 		}
 	}
 
+	// Delegate the common path to Chat() so all chat callers share the
+	// same broker shape; --temperature is handled inline because Chat()
+	// doesn't take it (low-volume use, didn't want to widen the signature).
+	if !hasTemp {
+		text, err := Chat(model, system, message, maxTokens)
+		if err != nil {
+			dieAPI(err)
+		}
+		fmt.Println(text)
+		return
+	}
+	// Temperature path: build the body locally with the extra field.
+	msgs := make([]map[string]string, 0, 2)
+	if system != "" {
+		msgs = append(msgs, map[string]string{"role": "system", "content": system})
+	}
+	msgs = append(msgs, map[string]string{"role": "user", "content": message})
+	body := map[string]any{"model": model, "messages": msgs, "temperature": temperature}
+	if maxTokens > 0 {
+		body["max_tokens"] = maxTokens
+	}
 	data, err := qaiAPI("POST", "/qai/v1/chat", body)
 	if err != nil {
 		dieAPI(err)
 	}
-
-	// Try to extract just the text response
 	var resp map[string]any
 	if json.Unmarshal(data, &resp) == nil {
+		if choices, ok := resp["choices"].([]any); ok && len(choices) > 0 {
+			if c0, ok := choices[0].(map[string]any); ok {
+				if msg, ok := c0["message"].(map[string]any); ok {
+					if content, ok := msg["content"].(string); ok {
+						fmt.Println(content)
+						return
+					}
+				}
+			}
+		}
 		if text, ok := resp["text"].(string); ok {
 			fmt.Println(text)
 			return

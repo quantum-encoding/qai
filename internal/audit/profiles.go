@@ -84,6 +84,19 @@ func init() {
 	}
 }
 
+// LookupProfile returns the system and user prompt for the named profile,
+// loaded from embedded defaults or ~/.qai/profiles/ overrides. Both strings
+// are templates ({{PATH}} {{LANG}} {{CODE}} placeholders) — caller renders.
+// Returns ok=false if the name is unknown so callers can choose how to handle
+// the miss (chat falls back to no system prompt; audit errors out).
+func LookupProfile(name string) (system, user string, ok bool) {
+	p, found := profiles[name]
+	if !found {
+		return "", "", false
+	}
+	return p.System, p.User, true
+}
+
 // profileNames returns sorted profile keys for deterministic help output.
 func ProfileNames() []string {
 	names := make([]string, 0, len(profiles))

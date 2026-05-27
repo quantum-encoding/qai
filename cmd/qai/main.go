@@ -19,10 +19,12 @@ import (
 	"github.com/quantum-encoding/qai-cli/internal/audit"
 	"github.com/quantum-encoding/qai-cli/internal/blast"
 	"github.com/quantum-encoding/qai-cli/internal/browser"
+	"github.com/quantum-encoding/qai-cli/internal/chat"
 	"github.com/quantum-encoding/qai-cli/internal/compile"
 	"github.com/quantum-encoding/qai-cli/internal/conduct"
 	"github.com/quantum-encoding/qai-cli/internal/config"
 	"github.com/quantum-encoding/qai-cli/internal/db"
+	"github.com/quantum-encoding/qai-cli/internal/docs"
 	"github.com/quantum-encoding/qai-cli/internal/doctor"
 	"github.com/quantum-encoding/qai-cli/internal/fleet"
 	"github.com/quantum-encoding/qai-cli/internal/graph"
@@ -30,6 +32,7 @@ import (
 	"github.com/quantum-encoding/qai-cli/internal/ingest"
 	"github.com/quantum-encoding/qai-cli/internal/initcmd"
 	"github.com/quantum-encoding/qai-cli/internal/note"
+	"github.com/quantum-encoding/qai-cli/internal/patterns"
 	"github.com/quantum-encoding/qai-cli/internal/project"
 	"github.com/quantum-encoding/qai-cli/internal/recall"
 	"github.com/quantum-encoding/qai-cli/internal/scrape"
@@ -52,6 +55,7 @@ var (
 func main() {
 	cfg := config.Load()
 	conduct.Cfg = cfg
+	chat.Cfg = cfg
 	search.Cfg = cfg
 	ingest.Cfg = cfg
 	audit.Cfg = cfg
@@ -140,12 +144,16 @@ func main() {
 		db.CmdDB(args) // handles its own --help
 	case "blast", "br":
 		blast.Cmd(args) // handles its own --help
+	case "patterns", "pat":
+		patterns.Cmd(args) // handles its own --help
 	case "i18n":
 		i18n.Cmd(args) // handles its own --help
 	case "clip":
 		cmdClip(args)
 	case "scrape":
 		scrape.CmdScrape(args) // handles its own --help
+	case "docs":
+		docs.CmdDocs(args) // handles its own --help
 	case "token":
 		if helpFlag(args) {
 			fmt.Println(helpToken)
@@ -158,6 +166,8 @@ func main() {
 		os.Stdout.WriteString(cheatSheet)
 	case "plugins":
 		cmdPlugins(args)
+	case "chat":
+		chat.CmdChat(args) // handles its own --help
 	case "conduct", "c":
 		conduct.CmdConduct(args) // handles its own --help
 	case "project", "proj":
@@ -786,6 +796,7 @@ Code:
   graph     Call/module/dependency graph (SVG/DOT)
   security  Scan for vulnerabilities (CWE mapped)
   audit     LLM code audit with profiles
+  chat      Single-shot chat (stdin-friendly; --template <profile>)
 
 System:
   browser   CDP browser automation (connects to Chrome/Brave)

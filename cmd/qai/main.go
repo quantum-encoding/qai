@@ -847,28 +847,51 @@ Models (positional or --model, aliases accepted):
   grok-pro / grok-quality / grok-imagine-image-quality
       xAI Grok Imagine Quality — higher resolution / quality
       (~$0.05/img 1K, ~$0.07/img 2K)
-  gpt / openai / gpt-image-1
-      OpenAI GPT-Image
+  gpt / openai / gpt-image-2
+      OpenAI GPT-Image 2 (DEFAULT for OpenAI alias — newest, best)
+  gpt-1.5 / gpt-image-1.5
+      OpenAI GPT-Image 1.5
+  gpt-1 / gpt-image-1
+      OpenAI GPT-Image 1
+  gpt-mini / gpt-image-1-mini
+      OpenAI GPT-Image 1 Mini (cheapest)
+  chatgpt / chatgpt-image
+      ChatGPT image generator (latest)
 
-Flags:
-  --model <id>       Override model id (aliases above also accepted here)
-  --count <n>        Number of images (default 1)
-  --aspect <ratio>   Aspect ratio, e.g. 16:9
-  --size <WxH>       Explicit pixel size, e.g. 1024x1024
-  --batch <file>     Generate from a file of prompts (one per line; '-' for stdin).
-                     Same --model/--aspect/--size apply to every prompt.
-  --parallel <n>     With --batch, number of concurrent generations (default 4).
+Flags (provider-neutral — translated per model):
+  --model <id>          Override model id (aliases above also accepted here)
+  --count <n>           Number of images (default 1)
+  --aspect <ratio>      Aspect ratio, e.g. 16:9, 9:16, 1:1, 2:3, 3:2
+                        Gemini: native field. OpenAI: maps to nearest size enum.
+                        Grok: dropped (model has no aspect field).
+  --size <value>        Image size — meaning depends on the model:
+                          Gemini Pro:  1K | 2K           (resolution tier)
+                          Gemini Flash: (no resolution; flag dropped)
+                          OpenAI:      1024x1024 | 1024x1536 | 1536x1024 | auto
+                          Pixel input on Gemini Pro snaps to nearest tier;
+                          off-spec WxH on OpenAI snaps to nearest enum value.
+  --quality <q>         OpenAI only: low | medium | high | auto
+  --background <bg>     OpenAI only: transparent | opaque | auto
+  --format <fmt>        OpenAI only: png | jpeg | webp
+  --batch <file>        Generate from a file of prompts (one per line; '-' for stdin).
+                        All flags apply to every prompt.
+  --parallel <n>        With --batch, number of concurrent generations (default 4).
+
+Unsupported flags for the target model are warn-and-dropped (stderr) so
+batches that swap models keep running. Use --model explicitly to see
+exactly which flag is being dropped where.
 
 Output:
   Images saved to ~/Pictures/generated/ (paths printed to stdout).
 
 Examples:
-  qai image "a lighthouse at dusk"                       # uses Nano Banana Pro
+  qai image "a lighthouse at dusk"                       # Nano Banana Pro, 2K default
+  qai image "moody street" --aspect 16:9 --size 1K       # Pro at 1K tier
   qai image "isometric cityscape" --aspect 16:9 --count 4
-  qai image "logo sketch" gpt                            # OpenAI via alias
-  qai image "punchy thumbnail" nano-banana-pro --aspect 16:9
-  qai image --batch prompts.txt --aspect 16:9            # 10 prompts, one file
-  qai image --batch - --parallel 2 < prompts.txt          # stdin, 2-wide
+  qai image "logo sketch" gpt --size 1024x1024 --background transparent
+  qai image "portrait" gpt --aspect 9:16                 # → size 1024x1536
+  qai image --batch prompts.txt --aspect 16:9            # all 16:9 across providers
+  qai image --batch - --parallel 2 < prompts.txt
   printf "a fox\\na koi pond\\na zen rock garden\\n" | qai image --batch -
 
 Related:

@@ -474,9 +474,23 @@ var imageModelAliases = map[string]string{
 	"grok-imagine-image-quality-latest": "grok-imagine-image-quality",
 
 	// ── OpenAI GPT-Image ─────────────────────────────────────────────
-	"gpt":         "gpt-image-1",
-	"openai":      "gpt-image-1",
-	"gpt-image-1": "gpt-image-1",
+	// Default `gpt` / `openai` shorthand resolves to gpt-image-2 — the
+	// newest in the family. Older variants stay reachable via their
+	// explicit ids (or shorthand). When OpenAI ships a successor, just
+	// bump the two default-aliases below; per-variant aliases keep
+	// existing scripts pinned.
+	"gpt":              "gpt-image-2",
+	"openai":           "gpt-image-2",
+	"gpt-image-2":      "gpt-image-2",
+	"gpt-2":            "gpt-image-2",
+	"gpt-image-1.5":    "gpt-image-1.5",
+	"gpt-1.5":          "gpt-image-1.5",
+	"gpt-image-1":      "gpt-image-1",
+	"gpt-1":            "gpt-image-1",
+	"gpt-image-1-mini": "gpt-image-1-mini",
+	"gpt-mini":         "gpt-image-1-mini",
+	"chatgpt":          "chatgpt-image-latest",
+	"chatgpt-image":    "chatgpt-image-latest",
 }
 
 func resolveImageModel(alias string) string {
@@ -490,14 +504,18 @@ func resolveImageModel(alias string) string {
 
 func conductImage(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: qai conduct image \"prompt\" [model] [--count N] [--aspect 16:9] [--size WxH]")
-		fmt.Fprintln(os.Stderr, "       qai conduct image --batch <file> [--parallel N] [model] [--aspect ...] [--size ...]")
+		fmt.Fprintln(os.Stderr, "usage: qai conduct image \"prompt\" [model] [flags]")
+		fmt.Fprintln(os.Stderr, "       qai conduct image --batch <file> [--parallel N] [model] [flags]")
+		fmt.Fprintln(os.Stderr, "Flags: --count N --aspect 16:9 --size {1K|2K|1024x1024|...} --quality low|medium|high|auto --background transparent|opaque|auto --format png|jpeg|webp")
 		os.Exit(1)
 	}
 
 	// Default: Gemini 3 Pro Image (Nano Banana Pro). Strongest realistic
 	// output of the three providers wired here.
-	body := map[string]any{"model": "gemini-3-pro-image-preview", "count": 1}
+	flags := imageFlags{
+		model: "gemini-3-pro-image-preview",
+		count: 1,
+	}
 
 	// Two-pass parse: detect --batch first (changes the prompt source),
 	// then process all other flags. The first positional that isn't a
@@ -522,13 +540,19 @@ func conductImage(args []string) {
 				i++
 			}
 		case "--model":
-			if i+1 < len(args) { body["model"] = resolveImageModel(args[i+1]); i++ }
+			if i+1 < len(args) { flags.model = resolveImageModel(args[i+1]); i++ }
 		case "--count":
-			if i+1 < len(args) { body["count"] = parseIntArg(args[i+1]); i++ }
+			if i+1 < len(args) { flags.count = parseIntArg(args[i+1]); i++ }
 		case "--aspect":
-			if i+1 < len(args) { body["aspect_ratio"] = args[i+1]; i++ }
+			if i+1 < len(args) { flags.aspect = args[i+1]; i++ }
 		case "--size":
-			if i+1 < len(args) { body["size"] = args[i+1]; i++ }
+			if i+1 < len(args) { flags.size = args[i+1]; i++ }
+		case "--quality":
+			if i+1 < len(args) { flags.quality = args[i+1]; i++ }
+		case "--background":
+			if i+1 < len(args) { flags.background = args[i+1]; i++ }
+		case "--format":
+			if i+1 < len(args) { flags.format = args[i+1]; i++ }
 		default:
 			if strings.HasPrefix(args[i], "-") {
 				continue // unknown flag — pass through silently
@@ -536,13 +560,18 @@ func conductImage(args []string) {
 			// First positional: prompt (only when not in batch mode).
 			// Subsequent positionals: model alias.
 			if batchPath == "" && !gotPrompt {
-				body["prompt"] = args[i]
+				flags.prompt = args[i]
 				gotPrompt = true
 			} else {
-				body["model"] = resolveImageModel(args[i])
+				flags.model = resolveImageModel(args[i])
 			}
 		}
 	}
+
+	// Translate user-neutral flags into the broker shape for THIS
+	// model's family (see image_params.go). Unsupported flags get a
+	// stderr warning instead of being silently dropped or hard-erroring.
+	body := buildImageBody(flags)
 
 	// Batch mode: prompts come from a file, body is the template.
 	if batchPath != "" {

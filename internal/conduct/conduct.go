@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"os"
 
 	"path/filepath"
@@ -336,6 +338,84 @@ func Chat(model, system, message string, maxTokens int) (string, error) {
 // call Chat() can render the same structured failure message.
 func DieAPI(err error) { dieAPI(err) }
 
+// API is the exported helper for any package that needs to talk to the
+// broker on a path that doesn't have its own typed wrapper. Same shape
+// as the internal qaiAPI: method+path+body → body bytes, with the
+// apiError sentinel so DieAPI can classify the failure. For multipart
+// uploads (POST /qai/v1/files) use APIMultipart below.
+func API(method, path string, body any) ([]byte, error) {
+	return qaiAPI(method, path, body)
+}
+
+// APIMultipart is the multipart variant of API. Used by `qai media`
+// to POST a file to /qai/v1/files. partName is the form field name
+// ("file"); filename is the user-visible name on the part header;
+// content is the raw bytes; mimeType is the Content-Type baked into
+// the part header (the broker uses this for its MIME allowlist).
+//
+// Reads the file into memory before sending — that's fine because the
+// broker caps uploads at 100 MiB and the media path auto-compresses
+// before this gets called. For arbitrary streaming we'd plumb an
+// io.Reader; not worth the complication today.
+func APIMultipart(path, partName, filename, mimeType string, content []byte) ([]byte, error) {
+	if qaiKey() == "" {
+		return nil, &apiError{kind: "auth", method: "POST", path: path}
+	}
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	partHeaders := textproto.MIMEHeader{}
+	partHeaders.Set("Content-Disposition",
+		fmt.Sprintf(`form-data; name=%q; filename=%q`, partName, filename))
+	partHeaders.Set("Content-Type", mimeType)
+	part, err := mw.CreatePart(partHeaders)
+	if err != nil {
+		return nil, &apiError{kind: "encode", method: "POST", path: path, wrapped: err}
+	}
+	if _, err := part.Write(content); err != nil {
+		return nil, &apiError{kind: "encode", method: "POST", path: path, wrapped: err}
+	}
+	if err := mw.Close(); err != nil {
+		return nil, &apiError{kind: "encode", method: "POST", path: path, wrapped: err}
+	}
+
+	req, err := http.NewRequest("POST", qaiBase()+path, &buf)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+qaiKey())
+	req.Header.Set("X-API-Key", qaiKey())
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	// Bumped timeout — uploading even 20 MB over a flaky residential
+	// link can take longer than the default qaiAPI 120s. Caller controls
+	// timeout via context once we plumb context.WithTimeout through
+	// here; for now, 10 minutes is the ceiling.
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, &apiError{kind: "network", method: "POST", path: path, wrapped: err}
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, &apiError{kind: "decode", method: "POST", path: path, wrapped: err}
+	}
+	if resp.StatusCode >= 400 {
+		bodyStr := strings.TrimSpace(string(respBody))
+		if len(bodyStr) > 800 {
+			bodyStr = bodyStr[:800] + "...(truncated)"
+		}
+		return nil, &apiError{
+			kind:   "broker",
+			status: resp.StatusCode,
+			method: "POST",
+			path:   path,
+			body:   bodyStr,
+		}
+	}
+	return respBody, nil
+}
+
 func conductChat(args []string) {
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: qai conduct chat <model> \"message\" [--system \"prompt\"] [--max-tokens N] [--temperature F]")
@@ -585,6 +665,7 @@ func conductImage(args []string) {
 		os.Exit(1)
 	}
 
+	fmt.Fprintf(os.Stderr, "sending request to %s...\n", flags.model)
 	data, err := qaiAPI("POST", "/qai/v1/images/generate", body)
 	if err != nil {
 		dieAPI(err)
@@ -630,19 +711,22 @@ func conductImageEdit(args []string) {
 		os.Exit(1)
 	}
 
+	b64 := base64.StdEncoding.EncodeToString(imgData)
 	body := map[string]any{
 		"prompt":       args[1],
-		"image_base64": base64.StdEncoding.EncodeToString(imgData),
+		"image_base64": b64,
+		"input_images": []string{b64},
 		"model":        "gpt-image-1",
 	}
 
 	for i := 2; i < len(args); i++ {
 		if args[i] == "--model" && i+1 < len(args) {
-			body["model"] = args[i+1]
+			body["model"] = resolveImageModel(args[i+1])
 			i++
 		}
 	}
 
+	fmt.Fprintf(os.Stderr, "sending request to %v...\n", body["model"])
 	data, err := qaiAPI("POST", "/qai/v1/images/edit", body)
 	if err != nil {
 		dieAPI(err)
@@ -650,7 +734,7 @@ func conductImageEdit(args []string) {
 
 	var resp map[string]any
 	if json.Unmarshal(data, &resp) == nil {
-		if b64, ok := resp["base64"].(string); ok {
+		if b64 := extractEditedImage(resp); b64 != "" {
 			path := saveBase64(b64, "Pictures/generated", ".png")
 			if path != "" {
 				fmt.Println(path)
@@ -688,6 +772,7 @@ func conductVideo(args []string) {
 		}
 	}
 
+	fmt.Fprintf(os.Stderr, "sending request to %v...\n", params["model"])
 	data, err := qaiAPI("POST", "/qai/v1/jobs", body)
 	if err != nil {
 		dieAPI(err)
@@ -717,6 +802,7 @@ func conductTTS(args []string) {
 		if args[i] == "--voice" && i+1 < len(args) { body["voice"] = args[i+1]; i++ }
 	}
 
+	fmt.Fprintf(os.Stderr, "sending request to %v...\n", body["model"])
 	data, err := qaiAPI("POST", "/qai/v1/audio/tts", body)
 	if err != nil { dieAPI(err) }
 
@@ -752,6 +838,7 @@ func conductTranscribe(args []string) {
 		if args[i] == "--language" && i+1 < len(args) { body["language"] = args[i+1]; i++ }
 	}
 
+	fmt.Fprintf(os.Stderr, "sending request to %v...\n", body["model"])
 	data, err := qaiAPI("POST", "/qai/v1/audio/stt", body)
 	if err != nil { dieAPI(err) }
 

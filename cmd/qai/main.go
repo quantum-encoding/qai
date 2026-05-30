@@ -22,6 +22,7 @@ import (
 	"github.com/quantum-encoding/qai-cli/internal/chat"
 	"github.com/quantum-encoding/qai-cli/internal/compile"
 	"github.com/quantum-encoding/qai-cli/internal/conduct"
+	"github.com/quantum-encoding/qai-cli/internal/media"
 	"github.com/quantum-encoding/qai-cli/internal/config"
 	"github.com/quantum-encoding/qai-cli/internal/db"
 	"github.com/quantum-encoding/qai-cli/internal/docs"
@@ -56,6 +57,7 @@ func main() {
 	cfg := config.Load()
 	conduct.Cfg = cfg
 	chat.Cfg = cfg
+	media.Cfg = cfg
 	search.Cfg = cfg
 	ingest.Cfg = cfg
 	audit.Cfg = cfg
@@ -168,6 +170,8 @@ func main() {
 		cmdPlugins(args)
 	case "chat":
 		chat.CmdChat(args) // handles its own --help
+	case "media":
+		media.CmdMedia(args) // handles its own --help
 	case "conduct", "c":
 		conduct.CmdConduct(args) // handles its own --help
 	case "project", "proj":
@@ -797,6 +801,7 @@ Code:
   security  Scan for vulnerabilities (CWE mapped)
   audit     LLM code audit with profiles
   chat      Single-shot chat (stdin-friendly; --template <profile>)
+  media     Multimodal chat with cached uploads (video/audio Q&A)
 
 System:
   browser   CDP browser automation (connects to Chrome/Brave)

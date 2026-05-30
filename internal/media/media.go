@@ -197,8 +197,16 @@ Flags (all subcommands):
                         (cheapest 3.x flash variant — ~$0.32/M in,
                         ~$1.88/M out, with cached reads at ~$0.03/M).
                         Aliases: gemini, flash, flash-lite, gemini-pro.
-  --system <prompt>     System instruction baked into the cached prefix.
-                        Session-create only; ignored on follow-up turns.
+  --template, -t <name> Named audit-profile system prompt — same
+                        registry as 'qai chat --template'. Default
+                        when neither --system nor --template is set:
+                        media-narrate (verbose-faithful narration that
+                        chunks when content won't fit in one reply).
+                        Edit ~/.qai/profiles/media-narrate.yaml to
+                        customise without rebuilding.
+  --system <prompt>     Explicit system prompt (wins over --template).
+                        Session-create only; ignored on follow-up turns
+                        because the cache carries the original.
   --mime <type>         Override the auto-detected MIME type (e.g.
                         video/mp4). Auto-detection works from the
                         extension; pass this if your file has an

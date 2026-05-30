@@ -20,11 +20,18 @@ import (
 func cmdOneShot(args []string) {
 	args, model := stripModelFlag(args)
 	model = resolveModel(model)
-	args, system, _ := stripFlag(args, "--system")
+	args, explicitSystem, _ := stripFlag(args, "--system")
+	args, templateName, _ := stripFlag(args, "--template")
+	args, templateNameShort, _ := stripFlag(args, "-t")
+	if templateName == "" {
+		templateName = templateNameShort
+	}
 	args, mimeOverride, _ := stripFlag(args, "--mime")
 	args, noCompress := stripBoolFlag(args, "--no-compress")
 	args, maxTokensStr, _ := stripFlag(args, "--max-tokens")
-	_ = system // one-shot doesn't ship the system instruction separately — bake into prompt or use chat mode
+	// One-shot supports system instructions via prepending a system
+	// message — it's a single turn so we don't need the cache for it.
+	system := resolveSystemInstruction(explicitSystem, templateName)
 
 	if len(args) < 2 {
 		diefatal("one-shot needs <file> <prompt>; got %d args. Example: qai media ~/lecture.mp4 \"summarise\"", len(args))
@@ -45,18 +52,24 @@ func cmdOneShot(args []string) {
 		upload.FileURI, upload.MimeType, upload.DurationSeconds)
 
 	// Build a chat request with the file_uri as a content block.
-	// One-shot only — no caching, no session.
-	body := map[string]any{
-		"model": model,
-		"messages": []map[string]any{
-			{
-				"role": "user",
-				"content_blocks": []map[string]any{
-					{"type": "file_uri", "file_uri": upload.FileURI, "mime_type": upload.MimeType},
-					{"type": "text", "text": prompt},
-				},
-			},
+	// One-shot only — no caching, no session. System prompt (if any)
+	// goes in as the first message; no cached_content to conflict with.
+	messages := []map[string]any{}
+	if system != "" {
+		messages = append(messages, map[string]any{
+			"role": "system", "content": system,
+		})
+	}
+	messages = append(messages, map[string]any{
+		"role": "user",
+		"content_blocks": []map[string]any{
+			{"type": "file_uri", "file_uri": upload.FileURI, "mime_type": upload.MimeType},
+			{"type": "text", "text": prompt},
 		},
+	})
+	body := map[string]any{
+		"model":    model,
+		"messages": messages,
 	}
 	if maxTokensStr != "" {
 		n, err := strconv.Atoi(maxTokensStr)

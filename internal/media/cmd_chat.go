@@ -4,7 +4,47 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/quantum-encoding/qai-cli/internal/audit"
 )
+
+// defaultTemplate is the system-instruction profile media sessions
+// pick up automatically when the user doesn't pass --system or
+// --template. It tells the model to be verbose-faithful (not
+// summarising) and to chunk when the content won't fit in one reply.
+// Edit ~/.qai/profiles/media-narrate.yaml to customise without
+// rebuilding the binary; the embedded copy in
+// internal/audit/profiles/media-narrate.yaml is the fallback.
+const defaultTemplate = "media-narrate"
+
+// resolveSystemInstruction picks the system prompt to bake into a new
+// session's cache. Priority:
+//
+//	--system "..."           explicit prompt wins
+//	--template <name>        named audit-profile system field
+//	(neither given)          falls back to defaultTemplate, then ""
+//
+// Returns the resolved string and exits with a helpful error when a
+// --template was named but not found.
+func resolveSystemInstruction(explicit, templateName string) string {
+	if explicit != "" {
+		return explicit
+	}
+	name := templateName
+	if name == "" {
+		name = defaultTemplate
+	}
+	sys, _, ok := audit.LookupProfile(name)
+	if !ok {
+		// Only error on user-named templates; missing default is
+		// silent (degrades to no system instruction).
+		if templateName != "" {
+			diefatal("unknown template %q — see `qai audit -- profile names` for available profiles, or drop a YAML in ~/.qai/profiles/", templateName)
+		}
+		return ""
+	}
+	return sys
+}
 
 // cmdChat handles `qai media chat ...`. Three modes:
 //
@@ -26,12 +66,23 @@ func cmdChat(args []string) {
 
 	args, model := stripModelFlag(args)
 	model = resolveModel(model)
-	args, system, _ := stripFlag(args, "--system")
+	args, explicitSystem, _ := stripFlag(args, "--system")
+	args, templateName, _ := stripFlag(args, "--template")
+	args, templateNameShort, _ := stripFlag(args, "-t")
+	if templateName == "" {
+		templateName = templateNameShort
+	}
 	args, mimeOverride, _ := stripFlag(args, "--mime")
 	args, noCompress := stripBoolFlag(args, "--no-compress")
 	args, sessionIDFlag, sessionFlagPresent := stripFlag(args, "--session")
 	args, ttlStr, _ := stripFlag(args, "--ttl")
 	args, maxTokensStr, _ := stripFlag(args, "--max-tokens")
+
+	// Resolve the system instruction once, in this order:
+	// --system "..." > --template <name> > defaultTemplate > "".
+	// Only relevant on session create; resume / explicit paths inherit
+	// the cache's baked-in instruction.
+	system := resolveSystemInstruction(explicitSystem, templateName)
 
 	// Decide mode.
 	switch {

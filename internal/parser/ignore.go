@@ -19,3 +19,12 @@ var IgnoreExts = map[string]bool{
 	".pdf": true, ".psd": true, ".ai": true, ".sketch": true,
 	".lock": true, ".sum": true, ".map": true,
 }
+
+// IgnoreFiles is keyed by exact filename (lowercased before lookup).
+// Use for OS / IDE droppings that aren't extension-distinguishable.
+var IgnoreFiles = map[string]bool{
+	".ds_store":   true, // macOS Finder metadata
+	"thumbs.db":   true, // Windows Explorer thumbnails
+	"desktop.ini": true, // Windows folder config
+	".localized":  true, // macOS localised-folder marker
+}

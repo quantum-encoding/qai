@@ -144,6 +144,9 @@ func collectAllFiles(absDir string) []collectedFile {
 			}
 			return nil
 		}
+		if parser.IgnoreFiles[strings.ToLower(name)] {
+			return nil
+		}
 		ext := strings.ToLower(filepath.Ext(name))
 		if parser.IgnoreExts[ext] {
 			return nil
@@ -245,7 +248,11 @@ func collectGitDiffFiles(absDir string, base string) ([]collectedFile, error) {
 			continue
 		}
 
-		// Skip ignored extensions.
+		// Skip ignored extensions / filenames.
+		base := strings.ToLower(filepath.Base(relToRoot))
+		if parser.IgnoreFiles[base] {
+			continue
+		}
 		ext := strings.ToLower(filepath.Ext(relToRoot))
 		if parser.IgnoreExts[ext] {
 			continue

@@ -393,6 +393,64 @@ func (c *Client) ListNotes(folderID string) ([]Note, error) {
 	return all, nil
 }
 
+// ListNotesFull paginates notes like ListNotes but lets the caller pick the
+// exact fields Joplin returns — used by the bridge sync, which needs `body`
+// and `source_url` on top of the metadata ListNotes hardcodes.
+//
+// Pass folderID="" to walk every note across every notebook. Pass nil/empty
+// fields to use Joplin's default (which omits body and source_url, in which
+// case you should have used ListNotes instead).
+//
+// The id, parent_id, title, user_created_time, user_updated_time fields are
+// always requested even if not listed — the bridge / status verbs need them
+// to keep edge writes / sort orders honest, and Joplin happily over-returns.
+func (c *Client) ListNotesFull(folderID string, fields []string) ([]Note, error) {
+	// Build a deduped fields list with the required-for-bridge metadata
+	// always present. Callers requesting just "body,source_url" still get
+	// id/parent_id/title/timestamps so the result is self-sufficient.
+	required := []string{"id", "parent_id", "title", "user_created_time", "user_updated_time"}
+	seen := map[string]bool{}
+	merged := make([]string, 0, len(fields)+len(required))
+	for _, f := range append(required, fields...) {
+		f = strings.TrimSpace(f)
+		if f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		merged = append(merged, f)
+	}
+
+	var all []Note
+	page := 1
+	for {
+		path := "/notes"
+		if folderID != "" {
+			path = "/folders/" + url.PathEscape(folderID) + "/notes"
+		}
+		u, err := c.urlWithToken(path, map[string]string{
+			"limit":  "100",
+			"page":   fmt.Sprintf("%d", page),
+			"fields": strings.Join(merged, ","),
+		})
+		if err != nil {
+			return nil, err
+		}
+		var resp noteList
+		if err := c.getJSON(u, &resp); err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if !resp.HasMore {
+			break
+		}
+		page++
+		if page > 50 {
+			return all, fmt.Errorf("joplin: note pagination runaway")
+		}
+	}
+	return all, nil
+}
+
 // CreateNote writes a new note.
 func (c *Client) CreateNote(n Note) (*Note, error) {
 	u, err := c.urlWithToken("/notes", nil)

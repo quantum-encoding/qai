@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/quantum-encoding/qai-cli/internal/joplin"
+	"github.com/quantum-encoding/qai-cli/internal/joplinbridge"
 )
 
 // CmdJoplin is the dispatcher wired into cmd/qai/main.go.
@@ -49,6 +50,8 @@ func CmdJoplin(args []string) {
 		cmdTags(rest)
 	case "tag":
 		cmdTag(rest)
+	case "bridge":
+		joplinbridge.CmdBridge(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "qai joplin: unknown subcommand %q\n", sub)
 		fmt.Fprintln(os.Stderr, "Run `qai joplin --help` for the list.")

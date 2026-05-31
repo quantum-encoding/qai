@@ -28,6 +28,7 @@
 package note
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,7 @@ import (
 
 	"github.com/quantum-encoding/qai-cli/internal/config"
 	"github.com/quantum-encoding/qai-cli/internal/joplin"
+	"github.com/quantum-encoding/qai-cli/internal/projectid"
 )
 
 // Cfg is injected from main, matching the pattern in project / agent.
@@ -100,10 +102,35 @@ func CmdNote(args []string) {
 	if err != nil {
 		die(err)
 	}
-	// Apply any --tag flags. Each tag is find-or-created (Joplin uses
-	// global tags; creating "work" twice is a no-op). Failures here
-	// don't roll back the note — the note already exists; we just
-	// emit a warning so the user knows the tag side didn't take.
+
+	// Auto-attach a project:<resolved> tag unless the caller opted out.
+	// Resolution rules live in internal/projectid — manifest-before-
+	// git-root walk, .qai/project override, noise-list refusal. The
+	// asymmetric-failure case favours auto-on: a wrong/extra tag is
+	// cheap to clean; a forgotten tag silently breaks the bootstrap
+	// recall query. Resolution errors are non-fatal — note still saved.
+	tagsToApply := append([]string(nil), opts.tags...)
+	if !opts.noAutoProject {
+		cwd, _ := os.Getwd()
+		if cwd != "" {
+			if r, err := projectid.Resolve(cwd); err == nil && r != nil {
+				tagsToApply = append(tagsToApply, "project:"+r.Project)
+			} else if !errors.Is(err, projectid.ErrNoise) {
+				// Real error (not the noise-list refusal we expect from
+				// scratch dirs) — surface to stderr so the user can fix
+				// their .qai/project / manifest, but don't fail the save.
+				fmt.Fprintf(os.Stderr, "qai note: project auto-detect: %v\n", err)
+			}
+		}
+	}
+
+	// Apply any --tag flags + the auto project tag. Each is find-or-
+	// created (Joplin uses global tags; creating "work" twice is a
+	// no-op). Failures here don't roll back the note — the note
+	// already exists; we just emit a warning so the user knows the
+	// tag side didn't take.
+	opts.tags = tagsToApply
+	_ = "" // keep gofmt happy below
 	var applied []string
 	for _, name := range opts.tags {
 		name = strings.TrimSpace(name)
@@ -132,13 +159,14 @@ func CmdNote(args []string) {
 // ── arg parsing ─────────────────────────────────────────────────────────────
 
 type options struct {
-	body     string
-	title    string
-	toFolder string
-	tags     []string
-	todo     bool
-	stdin    bool
-	help     bool
+	body          string
+	title         string
+	toFolder      string
+	tags          []string
+	todo          bool
+	stdin         bool
+	help          bool
+	noAutoProject bool // --no-auto-project: skip the project:<resolved> auto-tag
 }
 
 func parseArgs(args []string) (options, error) {
@@ -153,6 +181,8 @@ func parseArgs(args []string) (options, error) {
 			o.todo = true
 		case "--stdin":
 			o.stdin = true
+		case "--no-auto-project":
+			o.noAutoProject = true
 		case "--title", "-T":
 			i++
 			if i >= len(args) {

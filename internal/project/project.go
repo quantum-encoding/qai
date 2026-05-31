@@ -26,6 +26,7 @@ import (
 
 	"github.com/quantum-encoding/qai-cli/internal/config"
 	"github.com/quantum-encoding/qai-cli/internal/joplin"
+	"github.com/quantum-encoding/qai-cli/internal/projectid"
 )
 
 // Cfg is injected from main. Keeping it package-global matches the pattern
@@ -52,19 +53,58 @@ func CmdProject(args []string) {
 		doNotes(action.json)
 	case "copy":
 		doCopy(action.value, action.dryRun)
+	case "name":
+		doName(action.json, action.explain)
 	default:
 		usage()
 		os.Exit(1)
 	}
 }
 
+// doName prints the project tag the projectid resolver would derive
+// for the current working directory. Wraps the resolver so users (and
+// agents) can sanity-check what tag qai note --tag will auto-attach
+// without having to actually save a note. --explain shows which rule
+// fired and the path that produced the name.
+func doName(jsonOut, explain bool) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai project name: %v\n", err)
+		os.Exit(1)
+	}
+	r, err := projectid.Resolve(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai project name: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: drop a one-line `.qai/project` file at your repo root with the desired tag,")
+		fmt.Fprintln(os.Stderr, "    OR pass --no-auto-project on qai note to skip auto-tagging.")
+		os.Exit(1)
+	}
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(r)
+		return
+	}
+	fmt.Println(r.Project)
+	if explain {
+		fmt.Fprintf(os.Stderr, "  source:   %s\n", r.Source)
+		if r.ManifestPath != "" {
+			fmt.Fprintf(os.Stderr, "  via:      %s\n", r.ManifestPath)
+		}
+		if r.RawName != r.Project {
+			fmt.Fprintf(os.Stderr, "  raw:      %q  (sanitised → %q)\n", r.RawName, r.Project)
+		}
+	}
+}
+
 // ── arg parsing ─────────────────────────────────────────────────────────────
 
 type parsedAction struct {
-	kind   string // "list" | "create" | "set" | "current" | "show" | "notes" | "copy" | "help"
-	value  string // e.g. project name for --create / --set / --show, dir for --copy
-	json   bool
-	dryRun bool
+	kind    string // "list" | "create" | "set" | "current" | "show" | "notes" | "copy" | "name" | "help"
+	value   string // e.g. project name for --create / --set / --show, dir for --copy
+	json    bool
+	dryRun  bool
+	explain bool // --explain on `name` — show which resolution rule fired
 }
 
 // parseAction accepts both flag-style (`--list`, `--set "X"`) and positional
@@ -112,6 +152,10 @@ func parseAction(args []string) parsedAction {
 				i++
 				out.value = args[i]
 			}
+		case "name", "--name":
+			out.kind = "name"
+		case "--explain":
+			out.explain = true
 		default:
 			// Bare project name as sole positional: treat as `--set <name>`.
 			// Covers `qai project "My Project"`.

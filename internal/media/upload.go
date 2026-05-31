@@ -127,9 +127,16 @@ func uploadFile(path, mimeOverride string, noCompress bool) (*uploadResponse, fu
 	)
 	bar.Finish()
 	if err != nil {
+		// Return the upload error to the caller — do NOT process-exit.
+		// The batch worker needs to record this single failure and
+		// continue with the next video; the single-file qai media chat
+		// caller already wraps this with its own diefatalAPI so it
+		// still surfaces a clean error message to the user. Calling
+		// conduct.DieAPI here previously killed the whole batch on
+		// any 413 / network blip — that fix-up is what this comment
+		// guards against if it ever regresses.
 		cleanup()
-		conduct.DieAPI(err)
-		return nil, func() {}, err // unreachable
+		return nil, func() {}, err
 	}
 
 	var out uploadResponse

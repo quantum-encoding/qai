@@ -124,37 +124,46 @@ func stmtTag(jid, storedTitle, kind string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Edge UPSERTs — deterministic edge IDs for idempotent re-run
+// Edge writes — INSERT RELATION ... ON DUPLICATE KEY UPDATE
 // ---------------------------------------------------------------------------
+//
+// Surreal v3 enforces that RELATION-typed tables can only be populated
+// via RELATE / INSERT RELATION — UPSERT … SET in = … out = … creates a
+// plain record that fails the type check ("which is not a relation, but
+// expected a RELATION IN X OUT Y"). The ON DUPLICATE KEY UPDATE clause
+// gives the idempotent re-run guarantee: a second sync run hitting the
+// same edge id re-asserts in/out and returns OK.
+
+// stmtEdge is the shared shape for every edge write. Deterministic IDs
+// (`<table>:`<in>_<out>``) make ON DUPLICATE KEY UPDATE turn duplicates
+// into no-ops; the SET clause re-asserts in/out so the relation
+// pointers stay current even if the underlying records get rewritten.
+func stmtEdge(table, inJID, outJID, inRecord, outRecord string) string {
+	return fmt.Sprintf(
+		"INSERT RELATION INTO %s { id: %s, in: %s, out: %s } ON DUPLICATE KEY UPDATE in = $input.in, out = $input.out",
+		table,
+		edgeID(table, inJID, outJID),
+		inRecord,
+		outRecord,
+	)
+}
 
 // stmtContains relates a notebook to a note it owns.
 func stmtContains(notebookJID, noteJID string) string {
-	return fmt.Sprintf(
-		"UPSERT %s SET in = %s, out = %s",
-		edgeID("contains", notebookJID, noteJID),
-		recordID("notebook", notebookJID),
-		recordID("note", noteJID),
-	)
+	return stmtEdge("contains", notebookJID, noteJID,
+		recordID("notebook", notebookJID), recordID("note", noteJID))
 }
 
 // stmtNestedIn relates a child notebook to its parent.
 func stmtNestedIn(parentJID, childJID string) string {
-	return fmt.Sprintf(
-		"UPSERT %s SET in = %s, out = %s",
-		edgeID("nested_in", parentJID, childJID),
-		recordID("notebook", parentJID),
-		recordID("notebook", childJID),
-	)
+	return stmtEdge("nested_in", parentJID, childJID,
+		recordID("notebook", parentJID), recordID("notebook", childJID))
 }
 
 // stmtHasTag relates a note to a tag.
 func stmtHasTag(noteJID, tagJID string) string {
-	return fmt.Sprintf(
-		"UPSERT %s SET in = %s, out = %s",
-		edgeID("has_tag", noteJID, tagJID),
-		recordID("note", noteJID),
-		recordID("tag", tagJID),
-	)
+	return stmtEdge("has_tag", noteJID, tagJID,
+		recordID("note", noteJID), recordID("tag", tagJID))
 }
 
 // ---------------------------------------------------------------------------

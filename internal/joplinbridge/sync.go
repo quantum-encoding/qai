@@ -297,53 +297,97 @@ func (s *Syncer) upsertAllTags() error {
 	return blast.FirstError(results)
 }
 
-// syncOneNotebook walks one notebook's notes, building one transaction
-// containing the notebook UPSERT, the nested_in edge (if has parent),
-// every note UPSERT, every contains edge, and every has_tag edge. The
-// txn is atomic: either the whole notebook lands or nothing does — so
-// a mid-walk failure preserves the prior notebook's checkpoint as the
-// resume point. Returns the count of notes synced.
+// noteBatchSize bounds the per-transaction note count so the HTTP
+// POST body stays under Surreal's default 1MB cap. 25 notes ×
+// (title + 512-char excerpt + tag edges) leaves comfortable headroom
+// even for libraries with long titles. The notebook itself is
+// emitted in the first batch's transaction.
+const noteBatchSize = 25
+
+// syncOneNotebook walks one notebook's notes, batching them into
+// HTTP requests of `noteBatchSize` notes each. Each batch is its own
+// transaction. The first batch carries the notebook UPSERT and (if
+// applicable) the nested_in edge; later batches contain only notes
+// and their contains / has_tag edges.
+//
+// Atomicity granularity: per-batch, not per-notebook. The original
+// spec said "transaction per notebook, unless unusably large" — a
+// notebook with >25 notes is large enough to risk exceeding Surreal's
+// HTTP body limit, so we chunk. A mid-notebook failure leaves prior
+// batches committed; UPSERT idempotency means re-running re-walks
+// safely. The checkpoint write is still per-notebook so resume only
+// re-walks completed notebooks at notebook boundaries.
+//
+// Returns the count of notes successfully synced.
 func (s *Syncer) syncOneNotebook(f joplin.Folder) (int, error) {
 	notes, err := s.J.ListNotesFull(f.ID, []string{"body", "source_url"})
 	if err != nil {
 		return 0, fmt.Errorf("list notes: %w", err)
 	}
 
-	var b strings.Builder
-	b.WriteString("BEGIN TRANSACTION;\n")
-	b.WriteString(stmtNotebook(f.ID, f.Title, f.ParentID, 0))
-	b.WriteString(";\n")
-	if f.ParentID != "" {
-		b.WriteString(stmtNestedIn(f.ParentID, f.ID))
+	// Always send at least one transaction so the notebook + nested_in
+	// edge land even when the folder is empty.
+	if len(notes) == 0 {
+		var b strings.Builder
+		b.WriteString("BEGIN TRANSACTION;\n")
+		b.WriteString(stmtNotebook(f.ID, f.Title, f.ParentID, 0))
 		b.WriteString(";\n")
-	}
-	for _, n := range notes {
-		b.WriteString(stmtNote(n.ID, n.Title, f.ID, n.SourceURL, n.Body, n.UserCreatedTime, n.UserUpdatedTime))
-		b.WriteString(";\n")
-		b.WriteString(stmtContains(f.ID, n.ID))
-		b.WriteString(";\n")
-		// Fetch this note's tags. Joplin's /notes/{}/tags is one HTTP
-		// per note — slow on large notebooks. Acceptable for v1; if it
-		// becomes a bottleneck the right fix is a single bulk
-		// /tags/{}/notes pass + invert, not parallelism here.
-		tags, terr := s.J.GetNoteTags(n.ID)
-		if terr != nil {
-			return 0, fmt.Errorf("note %s tags: %w", n.ID, terr)
-		}
-		for _, t := range tags {
-			b.WriteString(stmtHasTag(n.ID, t.ID))
+		if f.ParentID != "" {
+			b.WriteString(stmtNestedIn(f.ParentID, f.ID))
 			b.WriteString(";\n")
 		}
+		b.WriteString("COMMIT TRANSACTION;\n")
+		return 0, s.execBatch(b.String())
 	}
-	b.WriteString("COMMIT TRANSACTION;\n")
-	results, err := s.S.Exec(b.String())
-	if err != nil {
-		return 0, err
-	}
-	if err := blast.FirstError(results); err != nil {
-		return 0, err
+
+	for start := 0; start < len(notes); start += noteBatchSize {
+		end := min(start+noteBatchSize, len(notes))
+		var b strings.Builder
+		b.WriteString("BEGIN TRANSACTION;\n")
+		if start == 0 {
+			// First batch carries the notebook row + nested_in edge.
+			b.WriteString(stmtNotebook(f.ID, f.Title, f.ParentID, 0))
+			b.WriteString(";\n")
+			if f.ParentID != "" {
+				b.WriteString(stmtNestedIn(f.ParentID, f.ID))
+				b.WriteString(";\n")
+			}
+		}
+		for _, n := range notes[start:end] {
+			b.WriteString(stmtNote(n.ID, n.Title, f.ID, n.SourceURL, n.Body, n.UserCreatedTime, n.UserUpdatedTime))
+			b.WriteString(";\n")
+			b.WriteString(stmtContains(f.ID, n.ID))
+			b.WriteString(";\n")
+			// Fetch this note's tags. /notes/{}/tags is one HTTP per
+			// note — acceptable for v1; if it becomes a bottleneck the
+			// right fix is a single bulk /tags/{}/notes invert pass,
+			// not parallelism inside the inner loop.
+			tags, terr := s.J.GetNoteTags(n.ID)
+			if terr != nil {
+				return start, fmt.Errorf("note %s tags: %w", n.ID, terr)
+			}
+			for _, t := range tags {
+				b.WriteString(stmtHasTag(n.ID, t.ID))
+				b.WriteString(";\n")
+			}
+		}
+		b.WriteString("COMMIT TRANSACTION;\n")
+		if err := s.execBatch(b.String()); err != nil {
+			return start, fmt.Errorf("batch %d..%d: %w", start, end, err)
+		}
 	}
 	return len(notes), nil
+}
+
+// execBatch runs one transaction body and surfaces the first
+// statement-level error as a Go error. Shared between the empty-
+// notebook path and the chunked walk above.
+func (s *Syncer) execBatch(body string) error {
+	results, err := s.S.Exec(body)
+	if err != nil {
+		return err
+	}
+	return blast.FirstError(results)
 }
 
 // checkpoint writes bootstrap_progress to bridge_state. Called after a

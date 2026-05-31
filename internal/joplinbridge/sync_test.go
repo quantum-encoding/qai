@@ -277,7 +277,7 @@ func TestSyncBasicWriteThrough(t *testing.T) {
 	for _, notes := range j.notes {
 		for _, n := range notes {
 			assertAnyStmtContains(t, s.stmts, "UPSERT note:`"+n.ID+"`")
-			assertAnyStmtContains(t, s.stmts, "UPSERT contains:`")
+			assertAnyStmtContains(t, s.stmts, "INSERT RELATION INTO contains { id: contains:`")
 		}
 	}
 	// Tag rows should be UPSERTed once (in the pre-walk batch).
@@ -293,13 +293,13 @@ func TestSyncBasicWriteThrough(t *testing.T) {
 
 	// nested_in for the qai/sessions → qai relationship.
 	assertAnyStmtContains(t, s.stmts,
-		"UPSERT nested_in:`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`")
+		"INSERT RELATION INTO nested_in { id: nested_in:`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`")
 
 	// has_tag edges for note 1 (which has two tags).
 	assertAnyStmtContains(t, s.stmts,
-		"UPSERT has_tag:`n0000000000000000000000000000001_11111111111111111111111111111111`")
+		"INSERT RELATION INTO has_tag { id: has_tag:`n0000000000000000000000000000001_11111111111111111111111111111111`")
 	assertAnyStmtContains(t, s.stmts,
-		"UPSERT has_tag:`n0000000000000000000000000000001_22222222222222222222222222222222`")
+		"INSERT RELATION INTO has_tag { id: has_tag:`n0000000000000000000000000000001_22222222222222222222222222222222`")
 
 	// Completion must stamp the cursor AND last_sync_completed.
 	assertAnyStmtContains(t, s.stmts, `cursor = "cursor-abc123"`)

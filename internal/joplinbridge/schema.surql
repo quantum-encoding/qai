@@ -111,4 +111,4 @@ DEFINE TABLE IF NOT EXISTS bridge_state SCHEMAFULL;
   DEFINE FIELD IF NOT EXISTS last_event_at       ON bridge_state TYPE option<datetime>;
   DEFINE FIELD IF NOT EXISTS last_sync_completed ON bridge_state TYPE option<datetime>;
   DEFINE FIELD IF NOT EXISTS last_error          ON bridge_state TYPE option<string>;
-  DEFINE FIELD IF NOT EXISTS bootstrap_progress  ON bridge_state TYPE option<object>;
+  DEFINE FIELD IF NOT EXISTS bootstrap_progress  ON bridge_state TYPE option<object> FLEXIBLE;

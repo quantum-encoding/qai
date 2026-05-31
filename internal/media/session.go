@@ -38,9 +38,10 @@ type SessionTurn struct {
 
 // sessionChatRequest is the body of POST /qai/v1/media-sessions/{id}/chat.
 type sessionChatRequest struct {
-	Message     string   `json:"message"`
-	MaxTokens   *int32   `json:"max_tokens,omitempty"`
-	Temperature *float32 `json:"temperature,omitempty"`
+	Message      string         `json:"message"`
+	MaxTokens    *int32         `json:"max_tokens,omitempty"`
+	Temperature  *float32       `json:"temperature,omitempty"`
+	OutputSchema map[string]any `json:"output_schema,omitempty"`
 }
 
 // sessionChatResponse is the JSON returned by the chat endpoint.
@@ -79,10 +80,24 @@ func CreateSession(req sessionCreateRequest) (*SessionRecord, error) {
 // SessionChat POSTs to /qai/v1/media-sessions/{id}/chat with the next
 // user turn. Returns the assistant's answer + the updated history.
 func SessionChat(id, message string, maxTokens *int32, temperature *float32) (*sessionChatResponse, error) {
-	path := fmt.Sprintf("/qai/v1/media-sessions/%s/chat", id)
-	resp, err := conduct.API("POST", path, sessionChatRequest{
+	return sessionChatCall(id, sessionChatRequest{
 		Message: message, MaxTokens: maxTokens, Temperature: temperature,
 	})
+}
+
+// SessionChatWithSchema is the structured-output variant. Forces
+// Gemini to fill the supplied JSON schema; the resulting response's
+// Answer field is the JSON string. Used by `qai media chat --auto`
+// on the first turn to extract a plan + the first chunk in one call.
+func SessionChatWithSchema(id, message string, maxTokens *int32, schema map[string]any) (*sessionChatResponse, error) {
+	return sessionChatCall(id, sessionChatRequest{
+		Message: message, MaxTokens: maxTokens, OutputSchema: schema,
+	})
+}
+
+func sessionChatCall(id string, req sessionChatRequest) (*sessionChatResponse, error) {
+	path := fmt.Sprintf("/qai/v1/media-sessions/%s/chat", id)
+	resp, err := conduct.API("POST", path, req)
 	if err != nil {
 		return nil, err
 	}

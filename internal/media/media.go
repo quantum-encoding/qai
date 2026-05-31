@@ -44,15 +44,17 @@ var Cfg *config.Config
 
 // CmdMedia is the entry point dispatched from cmd/qai/main.go.
 func CmdMedia(args []string) {
-	for _, a := range args {
-		if a == "--help" || a == "-h" {
-			fmt.Println(helpMedia)
-			return
-		}
-	}
+	// Top-level help only fires when the first arg is help-flavoured
+	// or when there's nothing at all. Subcommand-level --help is
+	// handled by each subcommand so `qai media batch --help` reaches
+	// the batch help instead of the parent.
 	if len(args) == 0 {
 		fmt.Println(helpMedia)
 		os.Exit(1)
+	}
+	if args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
+		fmt.Println(helpMedia)
+		return
 	}
 
 	switch args[0] {
@@ -60,6 +62,8 @@ func CmdMedia(args []string) {
 		cmdChat(args[1:])
 	case "sessions":
 		cmdSessions(args[1:])
+	case "batch":
+		cmdBatch(args[1:])
 	default:
 		// One-shot path. First positional = file, rest = prompt.
 		cmdOneShot(args)
@@ -187,6 +191,27 @@ Multi-turn (cached):
 
   qai media chat --session <id> "prompt"
     Explicit session pick (use after qai media sessions to find ids).
+
+Auto-walk + output:
+  qai media chat <file> --auto "prompt"
+    Forces a structured plan on turn 1 ({total_chunks, outline, chunk-1
+    content}), then auto-loops continuation turns up to --max-turns.
+    Streams each chunk to stdout as it arrives.
+
+  qai media chat ... -o out.md
+    Save the full response (single-turn) or assembled chunks (--auto)
+    to a markdown file with frontmatter. Use --append to add to an
+    existing file.
+
+  qai media chat ... --max-turns 12
+    Cap auto chunks (default 8). The plan may estimate more; capped
+    runs end with a "resume from chunk N+1" hint to stderr.
+
+Batch (auto-auto mode — every video in a folder/CSV):
+  qai media batch --folder <dir> [--output-dir <dir>] [--parallel N]
+  qai media batch --csv <path>   [--output-dir <dir>]
+  qai media batch <file>...
+    See 'qai media batch --help' for full flag list.
 
 Sessions:
   qai media sessions               List all your sessions.

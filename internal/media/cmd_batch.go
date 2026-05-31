@@ -37,12 +37,22 @@ func cmdBatch(args []string) {
 		}
 	}
 
+	defMax := int32(defaultMediaMaxTokens)
 	bopts := batchOpts{
 		maxTurns:        defaultMaxTurns,
 		outputDir:       "qai-media",
 		parallel:        2,
-		auto:            true, // batch defaults to auto — folder-walks make no sense without it
+		// Single-turn by default. Auto-walk forces a structured-output
+		// schema ({total_chunks, outline, content}) on turn 1 — useful
+		// when the cap forces chunking, harmful when the video fits
+		// in one reply (the schema constrains chunk-1's shape and the
+		// model produces tighter, less-faithful prose). With max-tokens
+		// at 65536 every typical course video fits single-turn. Pass
+		// --auto explicitly for very long media (>1h) where the schema
+		// pays for itself.
+		auto:            false,
 		continueOnError: true,
+		maxTokens:       &defMax,
 	}
 
 	args, bopts.model = stripModelFlag(args)
@@ -167,7 +177,7 @@ type batchJob struct {
 // rows that don't supply their own.
 func gatherBatchJobs(folder, csvPath string, positional []string, defaultPrompt string) ([]batchJob, error) {
 	if defaultPrompt == "" {
-		defaultPrompt = "Describe this video in detail."
+		defaultPrompt = defaultMediaPrompt
 	}
 	var jobs []batchJob
 
@@ -453,8 +463,8 @@ Inputs (use any combination — they merge into one job list):
 
 Flags:
   --prompt, -p "..."     default prompt applied to rows that don't
-                         specify their own. Default: "Describe this
-                         video in detail."
+                         specify their own. Default: action-checklist
+                         extraction (see defaultMediaPrompt).
   --output-dir <dir>     where to write the .md files (default:
                          ./qai-media). Per-row output column (CSV
                          col 3) overrides.
@@ -467,10 +477,15 @@ Flags:
   --ttl <seconds>        cache TTL per session (default 3600)
   --max-tokens <n>       per-turn cap (passed to every turn)
 
-  --auto                 enabled by default — uses structured-output
-                         planning + auto-walk to cover the whole video
-                         in N chunks (set --no-auto for one-shot mode)
-  --no-auto              one shot per video; just the first reply
+  --auto                 opt-in: use structured-output planning + auto-
+                         walk to cover the whole video in N chunks. Use
+                         this for very long media (>1h) where a single
+                         reply would truncate.
+  --no-auto              default: one reply per video. Higher fidelity
+                         on typical lecture-length content because the
+                         model uses its natural narrative shape instead
+                         of being forced into a {chunks,outline,content}
+                         schema on turn 1.
   --max-turns <n>        cap auto chunks per video (default 8)
 
   --parallel <n>         concurrent workers (default 2)

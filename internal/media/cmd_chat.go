@@ -26,6 +26,21 @@ const defaultTemplate = "media-narrate"
 // rather than have a runaway eat their token budget.
 const defaultMaxTurns = 8
 
+// defaultMediaMaxTokens is the per-turn output cap when the user
+// doesn't pass --max-tokens. Set high so video analysis isn't truncated
+// at the provider's default 4-8k ceiling — long action checklists need
+// the room. Gemini 3.1 family supports up to 65536 output tokens.
+const defaultMediaMaxTokens = 65536
+
+// defaultMediaPrompt is what the AI receives when no --prompt is
+// passed. The "teach me everything" framing beat the action-checklist
+// framing in a four-way A/B test against ground truth: it caught
+// fast on-screen text + split-second UI actions that the checklist
+// prompt missed (e.g. a copy-pasted HTML widget step that occupied
+// 22 seconds of video). The "preserve specifics" clause is load-
+// bearing — without it the model paraphrases away copy-pasted text.
+const defaultMediaPrompt = "Teach me everything in this video as if you were the speaker and I am taking notes. Walk through what they say, what they show on screen, what they click, what they recommend, what they warn about. Do not compress — preserve the speaker's specifics: numbers, names, tool URLs, exact menu paths, the order they do things, and the reasoning they give. Use whatever format best serves the content (sections, lists, tables, code blocks). Deliver the entire video in this single reply — you have plenty of room (tens of pages worth), no need to chunk or pause for a 'next' command."
+
 // chatOpts is the parsed flag set for all qai media chat paths. Holds
 // every per-invocation knob so chatCreateSession + chatExplicitSession
 // stop accumulating positional parameters as new features land.
@@ -81,7 +96,8 @@ func cmdChat(args []string) {
 		}
 	}
 
-	opts := chatOpts{maxTurns: defaultMaxTurns}
+	defMax := int32(defaultMediaMaxTokens)
+	opts := chatOpts{maxTurns: defaultMaxTurns, maxTokens: &defMax}
 
 	args, opts.model = stripModelFlag(args)
 	opts.model = resolveModel(opts.model)

@@ -332,6 +332,13 @@ func (c *Client) DeleteFolder(id string) error {
 	if err != nil {
 		return err
 	}
+	return c.deleteRequest(u)
+}
+
+// deleteRequest fires DELETE u and surfaces a structured error on
+// non-2xx. Factored out so DeleteFolder / DetachTagFromNote / DeleteTag
+// share the same retry-safe shape and identical error formatting.
+func (c *Client) deleteRequest(u string) error {
 	req, err := http.NewRequest(http.MethodDelete, u, nil)
 	if err != nil {
 		return err
@@ -569,6 +576,189 @@ func (c *Client) GetNote(id string, fields ...string) (*Note, error) {
 		return nil, err
 	}
 	return &n, nil
+}
+
+// ── Tags ────────────────────────────────────────────────────────────────────
+//
+// Joplin tags are global (not scoped per-notebook). A tag has a Title
+// (the human label) and an ID (the opaque 32-hex). Joplin treats tag
+// titles case-insensitively at search time but stores them with their
+// original casing; FindTagByName mirrors that semantic.
+
+// Tag is a single tag record. Title is the human-facing label;
+// downstream code shouldn't surface the ID to users.
+type Tag struct {
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	UserCreatedTime int64  `json:"user_created_time,omitempty"`
+	UserUpdatedTime int64  `json:"user_updated_time,omitempty"`
+}
+
+type tagList struct {
+	Items   []Tag `json:"items"`
+	HasMore bool  `json:"has_more"`
+}
+
+// ListTags returns every tag known to Joplin. Paginated under the hood
+// — the caller gets a single flat slice.
+func (c *Client) ListTags() ([]Tag, error) {
+	var all []Tag
+	page := 1
+	for {
+		u, err := c.urlWithToken("/tags", map[string]string{
+			"limit":  "100",
+			"page":   fmt.Sprintf("%d", page),
+			"fields": "id,title,user_created_time,user_updated_time",
+		})
+		if err != nil {
+			return nil, err
+		}
+		var resp tagList
+		if err := c.getJSON(u, &resp); err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if !resp.HasMore {
+			break
+		}
+		page++
+		if page > 50 {
+			return all, fmt.Errorf("joplin: tag pagination runaway")
+		}
+	}
+	return all, nil
+}
+
+// FindTagByName returns the tag whose Title matches name case-
+// insensitively, or nil if absent. Used as the resolver for every
+// name-keyed CLI argument.
+func (c *Client) FindTagByName(name string) (*Tag, error) {
+	tags, err := c.ListTags()
+	if err != nil {
+		return nil, err
+	}
+	for i := range tags {
+		if strings.EqualFold(tags[i].Title, name) {
+			return &tags[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// CreateTag creates a new tag with the given title. Returns the tag
+// with its ID populated.
+func (c *Client) CreateTag(title string) (*Tag, error) {
+	u, err := c.urlWithToken("/tags", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out Tag
+	if err := c.postJSON(u, map[string]any{"title": title}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// FindOrCreateTag is the idempotent helper most CLI paths actually want.
+// If a tag with the given title already exists, return it; otherwise
+// create it. Case-insensitive match — "Work" and "work" map to the same
+// tag and we prefer Joplin's stored casing over the input.
+func (c *Client) FindOrCreateTag(title string) (*Tag, error) {
+	if existing, err := c.FindTagByName(title); err != nil {
+		return nil, err
+	} else if existing != nil {
+		return existing, nil
+	}
+	return c.CreateTag(title)
+}
+
+// GetTagNotes returns the notes the given tag is applied to. Paginated.
+func (c *Client) GetTagNotes(tagID string) ([]Note, error) {
+	var all []Note
+	page := 1
+	for {
+		u, err := c.urlWithToken("/tags/"+url.PathEscape(tagID)+"/notes", map[string]string{
+			"limit":  "100",
+			"page":   fmt.Sprintf("%d", page),
+			"fields": "id,parent_id,title,user_created_time,user_updated_time",
+		})
+		if err != nil {
+			return nil, err
+		}
+		var resp noteList
+		if err := c.getJSON(u, &resp); err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if !resp.HasMore {
+			break
+		}
+		page++
+		if page > 50 {
+			return all, fmt.Errorf("joplin: tag-notes pagination runaway")
+		}
+	}
+	return all, nil
+}
+
+// GetNoteTags returns the tags applied to a given note.
+func (c *Client) GetNoteTags(noteID string) ([]Tag, error) {
+	var all []Tag
+	page := 1
+	for {
+		u, err := c.urlWithToken("/notes/"+url.PathEscape(noteID)+"/tags", map[string]string{
+			"limit":  "100",
+			"page":   fmt.Sprintf("%d", page),
+			"fields": "id,title",
+		})
+		if err != nil {
+			return nil, err
+		}
+		var resp tagList
+		if err := c.getJSON(u, &resp); err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Items...)
+		if !resp.HasMore {
+			break
+		}
+		page++
+		if page > 50 {
+			return all, fmt.Errorf("joplin: note-tags pagination runaway")
+		}
+	}
+	return all, nil
+}
+
+// AttachTagToNote applies the given tag to the given note. Idempotent
+// at the Joplin layer — re-attaching is a no-op on its side.
+func (c *Client) AttachTagToNote(tagID, noteID string) error {
+	u, err := c.urlWithToken("/tags/"+url.PathEscape(tagID)+"/notes", nil)
+	if err != nil {
+		return err
+	}
+	return c.postJSON(u, map[string]any{"id": noteID}, nil)
+}
+
+// DetachTagFromNote removes the tag→note association. The tag itself
+// (and the note itself) are left untouched.
+func (c *Client) DetachTagFromNote(tagID, noteID string) error {
+	u, err := c.urlWithToken(
+		"/tags/"+url.PathEscape(tagID)+"/notes/"+url.PathEscape(noteID), nil)
+	if err != nil {
+		return err
+	}
+	return c.deleteRequest(u)
+}
+
+// DeleteTag removes the tag globally. Every note loses the tag too.
+// Destructive — callers should confirm with the user before calling.
+func (c *Client) DeleteTag(tagID string) error {
+	u, err := c.urlWithToken("/tags/"+url.PathEscape(tagID), nil)
+	if err != nil {
+		return err
+	}
+	return c.deleteRequest(u)
 }
 
 // ── HTTP helpers ────────────────────────────────────────────────────────────

@@ -100,7 +100,33 @@ func CmdNote(args []string) {
 	if err != nil {
 		die(err)
 	}
-	fmt.Printf("saved → %s/%s (note %s)\n", folder, n.Title, n.ID)
+	// Apply any --tag flags. Each tag is find-or-created (Joplin uses
+	// global tags; creating "work" twice is a no-op). Failures here
+	// don't roll back the note — the note already exists; we just
+	// emit a warning so the user knows the tag side didn't take.
+	var applied []string
+	for _, name := range opts.tags {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		tag, err := client.FindOrCreateTag(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "qai note: tag %q find/create: %v\n", name, err)
+			continue
+		}
+		if err := client.AttachTagToNote(tag.ID, n.ID); err != nil {
+			fmt.Fprintf(os.Stderr, "qai note: tag %q attach: %v\n", name, err)
+			continue
+		}
+		applied = append(applied, tag.Title)
+	}
+	if len(applied) > 0 {
+		fmt.Printf("saved → %s/%s (note %s, tags: %s)\n",
+			folder, n.Title, n.ID, strings.Join(applied, ", "))
+	} else {
+		fmt.Printf("saved → %s/%s (note %s)\n", folder, n.Title, n.ID)
+	}
 }
 
 // ── arg parsing ─────────────────────────────────────────────────────────────
@@ -109,6 +135,7 @@ type options struct {
 	body     string
 	title    string
 	toFolder string
+	tags     []string
 	todo     bool
 	stdin    bool
 	help     bool
@@ -138,6 +165,20 @@ func parseArgs(args []string) (options, error) {
 				return o, fmt.Errorf("--to requires a notebook path")
 			}
 			o.toFolder = args[i]
+		case "--tag":
+			// Comma-separated list, e.g. --tag work,research. Repeating
+			// the flag accumulates: --tag work --tag research is the
+			// same as --tag work,research. Empty entries get dropped
+			// when applied (TrimSpace + skip).
+			i++
+			if i >= len(args) {
+				return o, fmt.Errorf("--tag requires a comma-separated list")
+			}
+			for _, t := range strings.Split(args[i], ",") {
+				if t = strings.TrimSpace(t); t != "" {
+					o.tags = append(o.tags, t)
+				}
+			}
 		default:
 			if strings.HasPrefix(a, "-") {
 				return o, fmt.Errorf("unknown flag %q", a)

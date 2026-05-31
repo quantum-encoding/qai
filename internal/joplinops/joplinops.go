@@ -45,6 +45,10 @@ func CmdJoplin(args []string) {
 		cmdEvents(rest)
 	case "search":
 		cmdSearch(rest)
+	case "tags":
+		cmdTags(rest)
+	case "tag":
+		cmdTag(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "qai joplin: unknown subcommand %q\n", sub)
 		fmt.Fprintln(os.Stderr, "Run `qai joplin --help` for the list.")
@@ -320,9 +324,16 @@ func cmdNote(args []string) {
 		fmt.Fprintf(os.Stderr, "qai joplin note: %v\n", err)
 		os.Exit(1)
 	}
+	// Tags are surfaced for every note — they're metadata Joplin
+	// renders separately from the note body, and any agent reading a
+	// note via this command will want to see them.
+	tags, _ := c.GetNoteTags(id)
 
 	if jsonOut {
-		emitJSON(n)
+		emitJSON(struct {
+			*joplin.Note
+			Tags []joplin.Tag `json:"tags,omitempty"`
+		}{n, tags})
 		return
 	}
 	fmt.Printf("ID:         %s\n", n.ID)
@@ -338,6 +349,13 @@ func cmdNote(args []string) {
 	}
 	if n.SourceURL != "" {
 		fmt.Printf("Source URL: %s\n", n.SourceURL)
+	}
+	if len(tags) > 0 {
+		names := make([]string, len(tags))
+		for i, t := range tags {
+			names[i] = t.Title
+		}
+		fmt.Printf("Tags:       %s\n", strings.Join(names, ", "))
 	}
 	if full {
 		fmt.Println()
@@ -447,6 +465,215 @@ func cmdSearch(args []string) {
 	}
 }
 
+// ── tags (list) ─────────────────────────────────────────────────────────
+
+func cmdTags(args []string) {
+	if hasFlag(args, "--help", "-h") {
+		fmt.Println(helpTags)
+		return
+	}
+	jsonOut := hasFlag(args, "--json", "-j")
+
+	c := connect()
+	tags, err := c.ListTags()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tags: %v\n", err)
+		os.Exit(1)
+	}
+
+	if jsonOut {
+		emitJSON(tags)
+		return
+	}
+	sort.Slice(tags, func(i, j int) bool {
+		return strings.ToLower(tags[i].Title) < strings.ToLower(tags[j].Title)
+	})
+	for _, t := range tags {
+		fmt.Printf("%s  %s\n", t.ID[:8], t.Title)
+	}
+}
+
+// ── tag (show / mutate) ─────────────────────────────────────────────────
+//
+// One verb, mode-flagged. The positional arg is always the tag name
+// (case-insensitive). Mode flags pick the verb:
+//
+//	(none)            show tag info + its notes
+//	--add-to <id>     attach tag to note (creates tag if missing)
+//	--rm-from <id>    detach tag from note
+//	--delete          delete tag globally (with confirmation when interactive)
+
+func cmdTag(args []string) {
+	if hasFlag(args, "--help", "-h") {
+		fmt.Println(helpTag)
+		return
+	}
+	jsonOut := hasFlag(args, "--json", "-j")
+	yes := hasFlag(args, "--yes", "-y")
+	doDelete := hasFlag(args, "--delete")
+	var addTo, rmFrom, limitStr string
+	args, addTo, _ = stripFlag(args, "--add-to")
+	args, rmFrom, _ = stripFlag(args, "--rm-from")
+	args, limitStr, _ = stripFlag(args, "--limit")
+
+	name := firstPositional(args)
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "qai joplin tag: missing tag name (use --help for syntax)")
+		os.Exit(1)
+	}
+
+	c := connect()
+
+	switch {
+	case addTo != "":
+		tagAdd(c, name, addTo, jsonOut)
+	case rmFrom != "":
+		tagRemove(c, name, rmFrom, jsonOut)
+	case doDelete:
+		tagDelete(c, name, yes, jsonOut)
+	default:
+		tagShow(c, name, limitStr, jsonOut)
+	}
+}
+
+func tagShow(c *joplin.Client, name, limitStr string, jsonOut bool) {
+	tag, err := c.FindTagByName(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: %v\n", err)
+		os.Exit(1)
+	}
+	if tag == nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: tag %q not found\n", name)
+		os.Exit(1)
+	}
+	notes, err := c.GetTagNotes(tag.ID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: list notes: %v\n", err)
+		os.Exit(1)
+	}
+	sort.Slice(notes, func(i, j int) bool {
+		return notes[i].UserUpdatedTime > notes[j].UserUpdatedTime
+	})
+	limit := 50
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if len(notes) > limit {
+		notes = notes[:limit]
+	}
+
+	if jsonOut {
+		emitJSON(struct {
+			Tag   joplin.Tag    `json:"tag"`
+			Notes []joplin.Note `json:"notes"`
+		}{*tag, notes})
+		return
+	}
+	fmt.Printf("Tag:   %s  (%s)\n", tag.Title, tag.ID)
+	fmt.Printf("Notes: %d\n", len(notes))
+	if len(notes) == 0 {
+		return
+	}
+	fmt.Println()
+	for _, n := range notes {
+		fmt.Printf("  %s  %s  %s\n", n.ID[:8], formatTime(n.UserUpdatedTime), truncate(n.Title, 80))
+	}
+}
+
+func tagAdd(c *joplin.Client, name, noteID string, jsonOut bool) {
+	if !looksLikeID(noteID) {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: --add-to expects a 32-char note ID (got %q)\n", noteID)
+		os.Exit(1)
+	}
+	tag, err := c.FindOrCreateTag(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: find-or-create %q: %v\n", name, err)
+		os.Exit(1)
+	}
+	if err := c.AttachTagToNote(tag.ID, noteID); err != nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: attach %q to %s: %v\n", name, noteID, err)
+		os.Exit(1)
+	}
+	if jsonOut {
+		emitJSON(map[string]any{"attached": true, "tag": tag, "note_id": noteID})
+		return
+	}
+	fmt.Printf("attached %q (%s) to %s\n", tag.Title, tag.ID[:8], noteID)
+}
+
+func tagRemove(c *joplin.Client, name, noteID string, jsonOut bool) {
+	if !looksLikeID(noteID) {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: --rm-from expects a 32-char note ID (got %q)\n", noteID)
+		os.Exit(1)
+	}
+	tag, err := c.FindTagByName(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: %v\n", err)
+		os.Exit(1)
+	}
+	if tag == nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: tag %q not found (nothing to detach)\n", name)
+		os.Exit(1)
+	}
+	if err := c.DetachTagFromNote(tag.ID, noteID); err != nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: detach %q from %s: %v\n", name, noteID, err)
+		os.Exit(1)
+	}
+	if jsonOut {
+		emitJSON(map[string]any{"detached": true, "tag": tag, "note_id": noteID})
+		return
+	}
+	fmt.Printf("detached %q (%s) from %s\n", tag.Title, tag.ID[:8], noteID)
+}
+
+func tagDelete(c *joplin.Client, name string, yes, jsonOut bool) {
+	tag, err := c.FindTagByName(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: %v\n", err)
+		os.Exit(1)
+	}
+	if tag == nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: tag %q not found\n", name)
+		os.Exit(1)
+	}
+	notes, _ := c.GetTagNotes(tag.ID)
+	if !yes && isInteractive() {
+		fmt.Fprintf(os.Stderr,
+			"About to delete tag %q (%s). %d note(s) currently carry it; deletion\n"+
+				"removes the tag entirely (notes themselves are untouched).\n"+
+				"  → re-run with --yes to confirm, or detach individual notes with --rm-from.\n",
+			tag.Title, tag.ID[:8], len(notes))
+		os.Exit(1)
+	}
+	if err := c.DeleteTag(tag.ID); err != nil {
+		fmt.Fprintf(os.Stderr, "qai joplin tag: delete %q: %v\n", name, err)
+		os.Exit(1)
+	}
+	if jsonOut {
+		emitJSON(map[string]any{"deleted": true, "tag": tag, "detached_from": len(notes)})
+		return
+	}
+	fmt.Printf("deleted tag %q (was on %d note(s))\n", tag.Title, len(notes))
+}
+
+// looksLikeID is the same 32-char hex test used for note IDs.
+func looksLikeID(s string) bool {
+	return len(s) == 32 && isHex(s)
+}
+
+// isInteractive reports whether stderr is a TTY. Confirmation prompts
+// only fire when there's a human watching — pipelines and scripts get
+// the safer behaviour of refusing to act without --yes.
+func isInteractive() bool {
+	fi, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
 // ── tiny utility helpers ────────────────────────────────────────────────
 
 func truncate(s string, n int) string {
@@ -507,6 +734,9 @@ USAGE
                                         resume from where you left off.
   qai joplin search <query> [--limit N] [--body] [--json]
                                         Full-text search across all notes.
+  qai joplin tags [--json]               List every tag.
+  qai joplin tag <name> [...]            Show / attach / detach / delete a tag.
+                                        See 'qai joplin tag --help'.
 
 EXAMPLES
   qai joplin notebooks
@@ -565,6 +795,28 @@ The cursor lets you poll for changes without re-listing everything:
 Item types: note, folder, resource, tag, note_tag, search, alarm,
 master_key, item_change, note_resource, resource_local_state, revision,
 migration. Event types: create, update, delete.`
+
+const helpTags = `qai joplin tags — list every tag
+
+USAGE
+  qai joplin tags                Alpha-sorted list with short IDs
+  qai joplin tags --json         Raw JSON
+
+Tags are global in Joplin (not per-notebook).`
+
+const helpTag = `qai joplin tag — show, attach, detach, or delete a tag
+
+USAGE
+  qai joplin tag <name>                       Show notes carrying this tag
+  qai joplin tag <name> --limit N             Cap shown notes (default 50)
+  qai joplin tag <name> --add-to <note-id>    Attach (creates tag if missing)
+  qai joplin tag <name> --rm-from <note-id>   Detach
+  qai joplin tag <name> --delete [--yes]      Delete tag globally
+  qai joplin tag ... --json                   Raw JSON
+
+Tag names are case-insensitive. Add and remove operate on 32-char note
+IDs (the form qai joplin notes / search prints). Delete refuses to
+proceed without --yes when run from a TTY; pipelines always require it.`
 
 const helpSearch = `qai joplin search — full-text search across all notes
 

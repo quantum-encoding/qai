@@ -31,12 +31,12 @@ func CmdBridge(args []string) {
 	switch sub {
 	case "sync":
 		cmdSync(rest)
+	case "tail":
+		cmdTail(rest)
+	case "status":
+		cmdStatus(rest)
 	case "schema":
 		fmt.Print(embeddedSchema)
-	case "tail":
-		stageStub("tail", 2)
-	case "status":
-		stageStub("status", 3)
 	case "graph":
 		stageStub("graph", 4)
 	default:
@@ -192,11 +192,12 @@ eventually wiki-links). Joplin remains the source of truth — Surreal
 is the index.
 
 USAGE
-  qai joplin bridge sync [--notebook X]   Bootstrap or resume the pull.
+  qai joplin bridge sync [--notebook X]   Bootstrap or resume the full pull.
+  qai joplin bridge tail [--once]         Long-running event-stream consumer.
+  qai joplin bridge status                Health + lag (now - last_poll_at).
   qai joplin bridge schema                Print the embedded schema (no apply).
 
-  qai joplin bridge tail | status | graph
-                                          Stages 2–4, not yet shipped.
+  qai joplin bridge graph                 Stage 4, not yet shipped.
 
 SCHEMA
   Namespace 'quantumencoding', database 'notes_graph' — both lazily

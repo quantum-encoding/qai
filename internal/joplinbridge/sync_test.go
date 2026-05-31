@@ -24,6 +24,11 @@ type fakeJoplin struct {
 	noteTags map[string][]string
 	tagByID  map[string]joplin.Tag
 
+	// notesByID / foldersByID are the lookup surfaces tail_test.go's
+	// per-event fixtures use. GetNote / GetFolder route through these.
+	notesByID   map[string]joplin.Note
+	foldersByID map[string]joplin.Folder
+
 	// cursor returned by GetEvents("", _) — sync calls this once at the
 	// end to capture Stage 2's starting point.
 	cursor string
@@ -53,6 +58,23 @@ func (f *fakeJoplin) GetNoteTags(noteID string) ([]joplin.Tag, error) {
 }
 func (f *fakeJoplin) GetEvents(_ string, _ int) (*joplin.EventsResponse, error) {
 	return &joplin.EventsResponse{Cursor: f.cursor}, nil
+}
+
+// GetNote / GetFolder are used by Stage 2 (tail). The basic-fixture
+// fakeJoplin doesn't need fancy behaviour here — tail_test.go's
+// fixtures populate notesByID / foldersByID for the cases that
+// exercise them.
+func (f *fakeJoplin) GetNote(id string, _ ...string) (*joplin.Note, error) {
+	if n, ok := f.notesByID[id]; ok {
+		return &n, nil
+	}
+	return nil, fmt.Errorf("HTTP 404: note %s not found", id)
+}
+func (f *fakeJoplin) GetFolder(id string) (*joplin.Folder, error) {
+	if folder, ok := f.foldersByID[id]; ok {
+		return &folder, nil
+	}
+	return nil, fmt.Errorf("HTTP 404: folder %s not found", id)
 }
 
 // ─── fake surrealAPI ────────────────────────────────────────────────────────

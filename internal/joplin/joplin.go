@@ -191,6 +191,23 @@ func (c *Client) ListFolders() ([]Folder, error) {
 	return all, nil
 }
 
+// GetFolder fetches a single folder by ID. Used by the bridge tail
+// daemon when a note event references a parent_id that's not yet in
+// the graph (folder created since the last sync — Joplin's /events
+// stream historically tracks notes only). Returns the folder shape
+// for an UPSERT into the notebook table.
+func (c *Client) GetFolder(id string) (*Folder, error) {
+	u, err := c.urlWithToken("/folders/"+url.PathEscape(id), nil)
+	if err != nil {
+		return nil, err
+	}
+	var f Folder
+	if err := c.getJSON(u, &f); err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
 // FindFolderByTitle does a trimmed, case-sensitive match against every notebook
 // title. Whitespace is stripped on both sides so notebooks whose title carries
 // a stray `\n` from older hook versions still match cleanly.

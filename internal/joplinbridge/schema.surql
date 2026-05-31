@@ -112,3 +112,13 @@ DEFINE TABLE IF NOT EXISTS bridge_state SCHEMAFULL;
   DEFINE FIELD IF NOT EXISTS last_sync_completed ON bridge_state TYPE option<datetime>;
   DEFINE FIELD IF NOT EXISTS last_error          ON bridge_state TYPE option<string>;
   DEFINE FIELD IF NOT EXISTS bootstrap_progress  ON bridge_state TYPE option<object> FLEXIBLE;
+  -- Stage 2 (tail) additions. All scalar — no FLEXIBLE needed.
+  -- last_poll_at is the HEARTBEAT timestamp: updated every successful
+  -- poll regardless of whether events came back. Stage 4's lag-for-
+  -- trust calculation reads this, not last_event_at (which is data
+  -- freshness, not liveness).
+  DEFINE FIELD IF NOT EXISTS last_poll_at        ON bridge_state TYPE option<datetime>;
+  DEFINE FIELD IF NOT EXISTS tail_state          ON bridge_state TYPE option<string>
+    ASSERT $value IN ['running','stopped','error'];
+  DEFINE FIELD IF NOT EXISTS tail_pid            ON bridge_state TYPE option<int>;
+  DEFINE FIELD IF NOT EXISTS events_applied      ON bridge_state TYPE option<int>;

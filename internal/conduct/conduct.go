@@ -338,6 +338,27 @@ func Chat(model, system, message string, maxTokens int) (string, error) {
 // call Chat() can render the same structured failure message.
 func DieAPI(err error) { dieAPI(err) }
 
+// countingReader wraps an io.Reader and fires onRead(sent, total) on
+// every successful read with the cumulative bytes consumed so far.
+// Used by APIMultipartProgress to drive the upload progress bar.
+type countingReader struct {
+	r      io.Reader
+	total  int64
+	sent   int64
+	onRead func(sent, total int64)
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if n > 0 {
+		c.sent += int64(n)
+		if c.onRead != nil {
+			c.onRead(c.sent, c.total)
+		}
+	}
+	return n, err
+}
+
 // API is the exported helper for any package that needs to talk to the
 // broker on a path that doesn't have its own typed wrapper. Same shape
 // as the internal qaiAPI: method+path+body → body bytes, with the
@@ -347,17 +368,31 @@ func API(method, path string, body any) ([]byte, error) {
 	return qaiAPI(method, path, body)
 }
 
-// APIMultipart is the multipart variant of API. Used by `qai media`
-// to POST a file to /qai/v1/files. partName is the form field name
-// ("file"); filename is the user-visible name on the part header;
-// content is the raw bytes; mimeType is the Content-Type baked into
-// the part header (the broker uses this for its MIME allowlist).
+// APIMultipart is the multipart variant of API. Same as
+// APIMultipartProgress but with a no-op progress callback — kept for
+// callers that don't need a progress bar (so they don't have to pass
+// a nil func).
+func APIMultipart(path, partName, filename, mimeType string, content []byte) ([]byte, error) {
+	return APIMultipartProgress(path, partName, filename, mimeType, content, nil)
+}
+
+// APIMultipartProgress is APIMultipart with a progress callback fired
+// on every wire-write as the body uploads. callback(sent, total) is
+// called from the HTTP client goroutine; total = body size including
+// multipart framing (the few hundred bytes of headers + boundary
+// markers around the file part). Pass nil for no progress.
+//
+// Used by `qai media` to POST a file to /qai/v1/files. partName is the
+// form field name ("file"); filename is the user-visible name on the
+// part header; content is the raw bytes; mimeType is the Content-Type
+// baked into the part header (the broker uses this for its MIME
+// allowlist).
 //
 // Reads the file into memory before sending — that's fine because the
 // broker caps uploads at 100 MiB and the media path auto-compresses
 // before this gets called. For arbitrary streaming we'd plumb an
 // io.Reader; not worth the complication today.
-func APIMultipart(path, partName, filename, mimeType string, content []byte) ([]byte, error) {
+func APIMultipartProgress(path, partName, filename, mimeType string, content []byte, callback func(sent, total int64)) ([]byte, error) {
 	if qaiKey() == "" {
 		return nil, &apiError{kind: "auth", method: "POST", path: path}
 	}
@@ -378,13 +413,24 @@ func APIMultipart(path, partName, filename, mimeType string, content []byte) ([]
 		return nil, &apiError{kind: "encode", method: "POST", path: path, wrapped: err}
 	}
 
-	req, err := http.NewRequest("POST", qaiBase()+path, &buf)
+	totalBytes := int64(buf.Len())
+	var body io.Reader = &buf
+	if callback != nil {
+		// Wrap the body so each Read fires the callback with cumulative
+		// bytes sent. http.Client.Do reads the body to send it; the
+		// counts here = bytes pushed onto the TCP socket, which is the
+		// number we want to show in the progress bar.
+		body = &countingReader{r: &buf, total: totalBytes, onRead: callback}
+	}
+
+	req, err := http.NewRequest("POST", qaiBase()+path, body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+qaiKey())
 	req.Header.Set("X-API-Key", qaiKey())
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.ContentLength = totalBytes // helps the server bound the upload
 
 	// Bumped timeout — uploading even 20 MB over a flaky residential
 	// link can take longer than the default qaiAPI 120s. Caller controls

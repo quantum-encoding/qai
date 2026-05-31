@@ -1,10 +1,15 @@
 package media
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // compressionThreshold is the file size above which we'll auto-compress
@@ -59,16 +64,20 @@ func shouldCompress(path, mimeType string) bool {
 	return false
 }
 
-// compressVideo runs the ffmpeg pipeline above and returns the path to
-// the compressed sidecar. The output lives in ~/.qai/tmp/ so it's easy
-// to clean up; caller is responsible for the cleanup (usually via a
-// defer trash() in the calling subcommand).
+// compressVideo runs the ffmpeg pipeline above with a live progress
+// bar (when stderr is a TTY) and returns the path to the compressed
+// sidecar. The output lives in ~/.qai/tmp/ so it's easy to clean up;
+// caller is responsible for the cleanup (usually via a defer trash()
+// in the calling subcommand).
 //
-// Status writes to stderr — the user sees "Compressing 149M → ~5M..."
-// so a 90-second ffmpeg pass doesn't look like a hang.
+// Progress: we probe the source's duration with ffprobe up front, then
+// run ffmpeg with -progress pipe:1 (machine-parseable key=value stream)
+// AND -v error (silences the default verbose frame-by-frame log). The
+// out_time_ms field on each progress record / total duration gives us
+// the percentage; the speed + bitrate fields populate the suffix line.
 func compressVideo(srcPath, mimeType string) (string, error) {
-	// Resolve ffmpeg explicitly so the error is actionable when it's
-	// missing.
+	_ = mimeType // reserved for per-mime tuning (audio bitrate, etc.)
+
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		return "", fmt.Errorf("ffmpeg not found on PATH — install ffmpeg (`brew install ffmpeg`) or pass --no-compress to upload the file as-is")
@@ -84,25 +93,97 @@ func compressVideo(srcPath, mimeType string) (string, error) {
 		return "", fmt.Errorf("stat %s: %w", srcPath, err)
 	}
 
-	// Output filename: keep the original stem, force .mp4 because the
-	// broker's allowlist is mp4/webm/quicktime and mp4 is the widest
-	// fit for the H.264/AAC payload ffmpeg produces.
 	stem := filenameStem(filepath.Base(srcPath))
 	outPath := filepath.Join(tmpRoot, stem+".compressed.mp4")
 
-	args := []string{"-y", "-loglevel", "error", "-stats", "-i", srcPath}
+	// Total work for the progress bar is the source duration in
+	// milliseconds. ffprobe failure isn't fatal — the bar just renders
+	// as indeterminate (bouncing) instead of percentage.
+	totalMs := probeDurationMs(srcPath)
+
+	prefix := fmt.Sprintf("compressing %s (%s → ~5M)",
+		filepath.Base(srcPath), humanBytes(srcInfo.Size()))
+
+	// Suffix renders the right side of the bar. ffmpeg progress records
+	// give us speed + bitrate; we compute ETA from elapsed / pct.
+	var lastSpeed, lastBitrate string
+	bar := NewBar(prefix, totalMs, func(b *Bar) string {
+		parts := []string{}
+		if lastBitrate != "" {
+			parts = append(parts, lastBitrate)
+		}
+		if lastSpeed != "" {
+			parts = append(parts, lastSpeed)
+		}
+		if b.Pct() > 0 && b.Pct() < 100 && totalMs > 0 {
+			eta := time.Duration(float64(b.Elapsed()) * (100 - float64(b.Pct())) / float64(b.Pct()))
+			parts = append(parts, "~"+roundShortDur(eta)+" left")
+		}
+		return strings.Join(parts, " • ")
+	})
+
+	// -v error: silence the default verbose log
+	// -progress pipe:1: structured progress records to stdout
+	args := []string{"-y", "-v", "error", "-progress", "pipe:1", "-i", srcPath}
 	args = append(args, videoCompressArgs...)
 	args = append(args, outPath)
 
-	fmt.Fprintf(os.Stderr,
-		"qai media: compressing %s (%s → ~5MB) for fast upload — this can take ~30-90s...\n",
-		filepath.Base(srcPath), humanBytes(srcInfo.Size()))
-
 	cmd := exec.Command(ffmpeg, args...)
-	cmd.Stderr = os.Stderr // surface ffmpeg progress live
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("ffmpeg failed: %w", err)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		bar.Finish()
+		return "", fmt.Errorf("ffmpeg stdout pipe: %w", err)
 	}
+	// Keep stderr — if ffmpeg fails, -v error gives us a real error
+	// line; we capture so we can surface it on failure but DON'T
+	// stream live (that would interleave with the bar).
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
+
+	if err := cmd.Start(); err != nil {
+		bar.Finish()
+		return "", fmt.Errorf("ffmpeg start: %w", err)
+	}
+
+	// Parse the progress stream in this goroutine; ffmpeg emits a
+	// block every ~0.5s with several key=value lines ending in
+	// "progress=continue" (or "=end" at finish).
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "out_time_ms":
+			// out_time_ms is actually MICROSECONDS in ffmpeg despite
+			// the name — divide by 1000 for ms. Verified against
+			// out_time wall-clock string.
+			if us, err := strconv.ParseInt(val, 10, 64); err == nil {
+				bar.Update(us / 1000)
+			}
+		case "speed":
+			if val != "N/A" && val != "" {
+				lastSpeed = strings.TrimSpace(val) + " speed"
+			}
+		case "bitrate":
+			if val != "N/A" && val != "" {
+				lastBitrate = strings.TrimSpace(val)
+			}
+		}
+	}
+
+	if err := cmd.Wait(); err != nil {
+		bar.Finish()
+		stderrTail := strings.TrimSpace(stderrBuf.String())
+		if len(stderrTail) > 400 {
+			stderrTail = "..." + stderrTail[len(stderrTail)-400:]
+		}
+		return "", fmt.Errorf("ffmpeg failed: %w%s", err, formatStderr(stderrTail))
+	}
+
+	bar.Finish()
 
 	outInfo, err := os.Stat(outPath)
 	if err != nil {
@@ -117,6 +198,48 @@ func compressVideo(srcPath, mimeType string) (string, error) {
 		float64(srcInfo.Size())/float64(outInfo.Size()))
 	return outPath, nil
 }
+
+// probeDurationMs returns the source's duration in milliseconds, or 0
+// if ffprobe is unavailable or fails. 0 makes the bar render as
+// indeterminate — degraded but not broken.
+func probeDurationMs(path string) int64 {
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		return 0
+	}
+	out, err := exec.Command(ffprobe,
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=nokey=1:noprint_wrappers=1",
+		path,
+	).Output()
+	if err != nil {
+		return 0
+	}
+	s := strings.TrimSpace(string(out))
+	if s == "" || s == "N/A" {
+		return 0
+	}
+	secs, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return int64(secs * 1000)
+}
+
+// formatStderr returns a leading newline + indented stderr tail, or
+// empty when stderr was empty — keeps the wrapped error compact when
+// ffmpeg failed quietly.
+func formatStderr(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "\n  ffmpeg stderr: " + s
+}
+
+// Make io explicitly used so future enhancements (streaming the bar to
+// a custom writer) compile without an unused-import warning.
+var _ = io.Discard
 
 // tmpDir returns ~/.qai/tmp/, creating it if needed. Compressed files
 // land here; callers trash them after upload completes (or leave them
@@ -151,4 +274,16 @@ func humanBytes(n int64) string {
 		return fmt.Sprintf("%.0fK", float64(n)/(1<<10))
 	}
 	return fmt.Sprintf("%dB", n)
+}
+
+// humanRate renders a bytes-per-second float in MB/s or KB/s. Used by
+// the upload progress bar's suffix formatter.
+func humanRate(bytesPerSec float64) string {
+	switch {
+	case bytesPerSec >= 1<<20:
+		return fmt.Sprintf("%.1fMB/s", bytesPerSec/(1<<20))
+	case bytesPerSec >= 1<<10:
+		return fmt.Sprintf("%.0fKB/s", bytesPerSec/(1<<10))
+	}
+	return fmt.Sprintf("%.0fB/s", bytesPerSec)
 }

@@ -105,7 +105,27 @@ func uploadFile(path, mimeOverride string, noCompress bool) (*uploadResponse, fu
 		return nil, func() {}, fmt.Errorf("read %s: %w", uploadPath, err)
 	}
 
-	resp, err := conduct.APIMultipart("/qai/v1/files", "file", filepath.Base(uploadPath), mime, content)
+	// Progress bar for the upload. Total is the raw file size (the
+	// multipart framing adds a few hundred bytes of overhead, so the
+	// bar may hit 100% slightly before the wire-write completes — close
+	// enough for the user to see "almost done").
+	prefix := fmt.Sprintf("uploading %s (%s) to Gemini Files API",
+		filepath.Base(uploadPath), humanBytes(int64(len(content))))
+	bar := NewBar(prefix, int64(len(content)), func(b *Bar) string {
+		// Throughput in human units. Avoid /0 on first tick.
+		elapsed := b.Elapsed().Seconds()
+		if elapsed < 0.05 {
+			return "starting..."
+		}
+		rate := float64(b.Current()) / elapsed
+		return humanRate(rate)
+	})
+
+	resp, err := conduct.APIMultipartProgress(
+		"/qai/v1/files", "file", filepath.Base(uploadPath), mime, content,
+		func(sent, total int64) { bar.Update(sent) },
+	)
+	bar.Finish()
 	if err != nil {
 		cleanup()
 		conduct.DieAPI(err)

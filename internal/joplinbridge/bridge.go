@@ -38,20 +38,16 @@ func CmdBridge(args []string) {
 	case "schema":
 		fmt.Print(embeddedSchema)
 	case "graph":
-		stageStub("graph", 4)
+		fmt.Fprintln(os.Stderr,
+			"qai joplin bridge graph: this verb moved to 'qai joplin graph'.")
+		fmt.Fprintln(os.Stderr,
+			"  → fix: run 'qai joplin graph context --help' for the read surface.")
+		os.Exit(2)
 	default:
 		fmt.Fprintf(os.Stderr, "qai joplin bridge: unknown subcommand %q\n", sub)
 		fmt.Fprintln(os.Stderr, "Run `qai joplin bridge --help` for the list.")
 		os.Exit(1)
 	}
-}
-
-func stageStub(name string, stage int) {
-	fmt.Fprintf(os.Stderr,
-		"qai joplin bridge %s: not yet implemented (Stage %d).\n"+
-			"  Stage 1 (sync) is shipped; later stages land in separate commits.\n",
-		name, stage)
-	os.Exit(2)
 }
 
 func isHelp(s string) bool { return s == "--help" || s == "-h" || s == "help" }
@@ -197,7 +193,7 @@ USAGE
   qai joplin bridge status                Health + lag (now - last_poll_at).
   qai joplin bridge schema                Print the embedded schema (no apply).
 
-  qai joplin bridge graph                 Stage 4, not yet shipped.
+  qai joplin bridge graph                 Moved to 'qai joplin graph context'.
 
 SCHEMA
   Namespace 'quantumencoding', database 'notes_graph' — both lazily

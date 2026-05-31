@@ -51,6 +51,26 @@ DEFINE TABLE IF NOT EXISTS note SCHEMAFULL;
   DEFINE FIELD IF NOT EXISTS updated_at ON note TYPE datetime;
   DEFINE FIELD IF NOT EXISTS word_count ON note TYPE int;
 
+  -- Full-text recall path (Stage 4). Lowercase + ASCII fold lets the
+  -- query 'wasm' match 'WASM', 'Wasm', and 'wäsm'. snowball(english)
+  -- gives a usable stemmer; if multilingual recall ever matters, swap
+  -- for an icu analyzer per locale, with the index re-built behind a
+  -- migration verb. BM25 is the scorer; HIGHLIGHTS lets a future stage
+  -- render a 'why this matched' snippet without re-migrating the index.
+  --
+  -- v3 renamed `SEARCH ANALYZER` → `FULLTEXT ANALYZER` (the @@ matches-
+  -- operator stayed; only the index keyword changed). 6,813-note library
+  -- builds title index in ~1s and excerpt index in ~3.5s on first apply.
+  DEFINE ANALYZER IF NOT EXISTS note_search
+    TOKENIZERS class
+    FILTERS lowercase, ascii, snowball(english);
+  DEFINE INDEX IF NOT EXISTS note_search_title
+    ON note FIELDS title
+    FULLTEXT ANALYZER note_search BM25 HIGHLIGHTS;
+  DEFINE INDEX IF NOT EXISTS note_search_excerpt
+    ON note FIELDS excerpt
+    FULLTEXT ANALYZER note_search BM25 HIGHLIGHTS;
+
 -- ----------------------------------------------------------------------------
 -- tag — Joplin's global tags, classified into a kind axis
 -- ----------------------------------------------------------------------------

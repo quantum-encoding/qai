@@ -22,6 +22,7 @@ import (
 
 	"github.com/quantum-encoding/qai-cli/internal/joplin"
 	"github.com/quantum-encoding/qai-cli/internal/joplinbridge"
+	"github.com/quantum-encoding/qai-cli/internal/joplingraph"
 )
 
 // CmdJoplin is the dispatcher wired into cmd/qai/main.go.
@@ -52,6 +53,8 @@ func CmdJoplin(args []string) {
 		cmdTag(rest)
 	case "bridge":
 		joplinbridge.CmdBridge(rest)
+	case "graph":
+		joplingraph.CmdGraph(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "qai joplin: unknown subcommand %q\n", sub)
 		fmt.Fprintln(os.Stderr, "Run `qai joplin --help` for the list.")
@@ -740,6 +743,10 @@ USAGE
   qai joplin tags [--json]               List every tag.
   qai joplin tag <name> [...]            Show / attach / detach / delete a tag.
                                         See 'qai joplin tag --help'.
+  qai joplin bridge ...                  Joplin → SurrealDB sync subsystem.
+                                        See 'qai joplin bridge --help'.
+  qai joplin graph context [...]         Agent-memory READ verb (Stage 4).
+                                        See 'qai joplin graph context --help'.
 
 EXAMPLES
   qai joplin notebooks

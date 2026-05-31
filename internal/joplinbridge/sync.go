@@ -190,7 +190,7 @@ func (s *Syncer) Run() error {
 	}
 	var completion string
 	if s.NotebookScope != "" {
-		completion = stmtCompletionScoped(cursor, s.Now())
+		completion = stmtCompletionScoped(cursor)
 	} else {
 		completion = stmtCompletion(cursor, s.Now())
 	}

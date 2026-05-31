@@ -326,6 +326,16 @@ func TestSyncBasicWriteThrough(t *testing.T) {
 	// Completion must stamp the cursor AND last_sync_completed.
 	assertAnyStmtContains(t, s.stmts, `cursor = "cursor-abc123"`)
 	assertAnyStmtContains(t, s.stmts, "last_sync_completed = <datetime>")
+
+	// Stage 3 bug fix: completion must NOT touch last_event_at. Tail's
+	// per-event apply is the only legit source of data freshness.
+	for _, stmt := range s.stmts {
+		if strings.Contains(stmt, "UPSERT bridge_state:current") &&
+			strings.Contains(stmt, "bootstrap_progress = NONE") &&
+			strings.Contains(stmt, "last_event_at") {
+			t.Errorf("completion stmt stamps last_event_at — should be untouched:\n  %s", stmt)
+		}
+	}
 }
 
 // TestSyncIdempotentSecondRun runs Run() twice back-to-back with the
@@ -418,6 +428,14 @@ func TestSyncScopedSkipsLastSyncCompleted(t *testing.T) {
 	for _, stmt := range s.stmts {
 		if strings.Contains(stmt, "last_sync_completed = <datetime>") {
 			t.Errorf("scoped run stamped last_sync_completed: %s", stmt)
+		}
+	}
+	// Stage 3 bug fix: scoped completion must NOT touch last_event_at.
+	for _, stmt := range s.stmts {
+		if strings.Contains(stmt, "UPSERT bridge_state:current") &&
+			strings.Contains(stmt, "bootstrap_progress = NONE") &&
+			strings.Contains(stmt, "last_event_at") {
+			t.Errorf("scoped completion stmt stamps last_event_at — should be untouched:\n  %s", stmt)
 		}
 	}
 	// Notebook 'c' is outside scope and must NOT have been walked.

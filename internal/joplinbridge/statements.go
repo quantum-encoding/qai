@@ -195,26 +195,29 @@ func stmtCheckpoint(notebooksDone, notesDone int, currentNotebookID string, curr
 // stmtCompletion is the clean-handoff write — cursor populated, progress
 // cleared, last_sync_completed stamped. Use stmtCompletionScoped instead
 // when --notebook X was passed (no last_sync_completed update).
+//
+// last_event_at is deliberately NOT touched here: sync didn't apply any
+// /events; it bootstrapped notebooks. Tail's per-event apply is the only
+// legitimate source. Stamping now() would smear the data-freshness
+// signal and mislead any caller reading data age.
 func stmtCompletion(cursor string, now time.Time) string {
 	return fmt.Sprintf(
-		"UPSERT %s SET cursor = %s, last_event_at = %s, last_sync_completed = %s, last_error = NONE, bootstrap_progress = NONE",
+		"UPSERT %s SET cursor = %s, last_sync_completed = %s, last_error = NONE, bootstrap_progress = NONE",
 		bridgeStateID,
 		quote(cursor),
-		fmt.Sprintf("<datetime>%q", now.UTC().Format("2006-01-02T15:04:05.000Z")),
 		fmt.Sprintf("<datetime>%q", now.UTC().Format("2006-01-02T15:04:05.000Z")),
 	)
 }
 
 // stmtCompletionScoped is the --notebook-X variant. Writes cursor and
-// last_event_at (so Stage 2 has a valid start point even after a partial
-// adoption) and clears bootstrap_progress, but DOES NOT stamp
-// last_sync_completed — the library hasn't been fully synced.
-func stmtCompletionScoped(cursor string, now time.Time) string {
+// clears bootstrap_progress, but DOES NOT stamp last_sync_completed —
+// the library hasn't been fully synced. Same last_event_at carve-out
+// as stmtCompletion.
+func stmtCompletionScoped(cursor string) string {
 	return fmt.Sprintf(
-		"UPSERT %s SET cursor = %s, last_event_at = %s, last_error = NONE, bootstrap_progress = NONE",
+		"UPSERT %s SET cursor = %s, last_error = NONE, bootstrap_progress = NONE",
 		bridgeStateID,
 		quote(cursor),
-		fmt.Sprintf("<datetime>%q", now.UTC().Format("2006-01-02T15:04:05.000Z")),
 	)
 }
 

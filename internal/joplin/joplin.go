@@ -408,6 +408,150 @@ func (c *Client) UpdateNoteBody(id, body string) error {
 	return c.putJSON(u, map[string]any{"body": body}, nil)
 }
 
+// SearchResult is one item returned from /search?type=note.
+type SearchResult struct {
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	Body            string `json:"body,omitempty"`
+	ParentID        string `json:"parent_id,omitempty"`
+	UserCreatedTime int64  `json:"user_created_time,omitempty"`
+	UserUpdatedTime int64  `json:"user_updated_time,omitempty"`
+}
+
+// SearchNotes runs Joplin's full-text search and returns matching notes.
+// fields is optional — empty means "id, title" (the default index fields).
+// Pass extra fields like "body" when you need them, but the search index
+// returns body excerpts only on items with a body field actually requested.
+func (c *Client) SearchNotes(query string, limit int, fields ...string) ([]SearchResult, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	params := map[string]string{
+		"query":     query,
+		"type":      "note",
+		"limit":     fmt.Sprintf("%d", limit),
+		"order_by":  "user_updated_time",
+		"order_dir": "DESC",
+	}
+	if len(fields) > 0 {
+		params["fields"] = strings.Join(fields, ",")
+	}
+	u, err := c.urlWithToken("/search", params)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Items   []SearchResult `json:"items"`
+		HasMore bool           `json:"has_more"`
+	}
+	if err := c.getJSON(u, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Items, nil
+}
+
+// ── Events (incremental change stream) ─────────────────────────────────────
+
+// Event is one entry in Joplin's /events stream. ItemType and EventType are
+// small integers; use ItemTypeName / EventTypeName for human-readable form.
+//
+// Joplin's enum mappings (from the upstream Joplin source):
+//
+//	ItemType:  1=note, 2=folder, 3=resource, 4=tag, 5=note_tag, 6=search,
+//	           7=alarm, 8=master_key, 9=item_change, 10=note_resource,
+//	           11=resource_local_state, 12=revision, 13=migration
+//	EventType: 1=create, 2=update, 3=delete
+type Event struct {
+	ID          int64  `json:"id"`
+	ItemType    int    `json:"item_type"`
+	ItemID      string `json:"item_id"`
+	EventType   int    `json:"type"`
+	CreatedTime int64  `json:"created_time"`
+	Source      *int   `json:"source,omitempty"`
+}
+
+// EventsResponse wraps the paginated /events result. Use Cursor as the
+// resume token on the next call — pass it to GetEvents to retrieve only
+// what's changed since.
+type EventsResponse struct {
+	Items   []Event `json:"items"`
+	HasMore bool    `json:"has_more"`
+	Cursor  string  `json:"cursor,omitempty"`
+}
+
+// GetEvents fetches the next page of change events. Pass cursor="" on
+// the first call to start from the current head; subsequent calls pass
+// the previously-returned Cursor to resume. limit=0 picks a 100-item
+// default — matches Joplin's own behaviour.
+func (c *Client) GetEvents(cursor string, limit int) (*EventsResponse, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	params := map[string]string{
+		"limit": fmt.Sprintf("%d", limit),
+	}
+	if cursor != "" {
+		params["cursor"] = cursor
+	}
+	u, err := c.urlWithToken("/events", params)
+	if err != nil {
+		return nil, err
+	}
+	var resp EventsResponse
+	if err := c.getJSON(u, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// ItemTypeName maps the numeric ItemType to a stable lowercase label.
+// Unknown values get "other" rather than panicking — the upstream enum
+// is open-ended and may gain values in future Joplin releases.
+func ItemTypeName(n int) string {
+	switch n {
+	case 1:
+		return "note"
+	case 2:
+		return "folder"
+	case 3:
+		return "resource"
+	case 4:
+		return "tag"
+	case 5:
+		return "note_tag"
+	case 6:
+		return "search"
+	case 7:
+		return "alarm"
+	case 8:
+		return "master_key"
+	case 9:
+		return "item_change"
+	case 10:
+		return "note_resource"
+	case 11:
+		return "resource_local_state"
+	case 12:
+		return "revision"
+	case 13:
+		return "migration"
+	}
+	return "other"
+}
+
+// EventTypeName maps the numeric EventType to "create"/"update"/"delete".
+func EventTypeName(n int) string {
+	switch n {
+	case 1:
+		return "create"
+	case 2:
+		return "update"
+	case 3:
+		return "delete"
+	}
+	return "unknown"
+}
+
 // GetNote fetches a single note with a subset of fields (default = everything).
 func (c *Client) GetNote(id string, fields ...string) (*Note, error) {
 	params := map[string]string{}

@@ -32,6 +32,7 @@ import (
 	"github.com/quantum-encoding/qai-cli/internal/i18n"
 	"github.com/quantum-encoding/qai-cli/internal/ingest"
 	"github.com/quantum-encoding/qai-cli/internal/initcmd"
+	"github.com/quantum-encoding/qai-cli/internal/joplinops"
 	"github.com/quantum-encoding/qai-cli/internal/note"
 	"github.com/quantum-encoding/qai-cli/internal/patterns"
 	"github.com/quantum-encoding/qai-cli/internal/project"
@@ -152,6 +153,8 @@ func main() {
 		i18n.Cmd(args) // handles its own --help
 	case "clip":
 		cmdClip(args)
+	case "joplin":
+		joplinops.CmdJoplin(args) // handles its own --help
 	case "scrape":
 		scrape.CmdScrape(args) // handles its own --help
 	case "docs":

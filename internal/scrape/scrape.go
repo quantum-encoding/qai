@@ -96,6 +96,7 @@ type flags struct {
 	resume     bool
 	scout      bool
 	scoutMax   int
+	noClip     bool // --no-clip: skip Playwright, locate existing Joplin note instead
 }
 
 func parseFlags(args []string) *flags {
@@ -149,6 +150,16 @@ func parseFlags(args []string) *flags {
 			}
 		case "--resume":
 			opts.resume = true
+		case "--no-clip":
+			// Skip the Playwright clip step — assume the user has
+			// already manually clipped the page via the Joplin Web
+			// Clipper browser extension. The pipeline locates the
+			// existing note by title (preset prefix + ID) or by URL
+			// search. Use this for sites where the real-browser clip
+			// captures content the headless Playwright session can't
+			// — auth-gated prices, region-locked content, anti-bot
+			// timing tricks — anything AliExpress does, basically.
+			opts.noClip = true
 		case "--scout":
 			opts.scout = true
 		case "--max":

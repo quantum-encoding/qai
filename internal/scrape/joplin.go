@@ -150,9 +150,48 @@ func findNoteByTitle(token, title string) (*joplinNote, error) {
 }
 
 func searchNoteByTitle(token, title string) (*joplinNote, error) {
+	items, err := joplinSearch(token, title)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		if items[i].Title == title {
+			return &items[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// FindNoteContainingID returns the most recently created Joplin note
+// whose title or body contains the given product ID. Used when the
+// user has manually clipped via the Joplin Web Clipper browser
+// extension — the Web Clipper titles notes from the page's HTML
+// <title>, not from our preset+ID convention, so the strict equality
+// match used by searchNoteByTitle would miss it. We rely on Joplin's
+// full-text search to find the product ID anywhere in the note body
+// (the canonical product URL on the page is always indexed).
+func FindNoteContainingID(token, id string) (*joplinNote, error) {
+	items, err := joplinSearch(token, id)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) > 0 {
+		// Items come back sorted DESC by created_time — most recent
+		// match wins, which is what the user wants when they've just
+		// clipped a fresh page that happens to share an ID prefix
+		// with an earlier listing.
+		return &items[0], nil
+	}
+	return nil, nil
+}
+
+// joplinSearch hits Joplin's /search endpoint and returns the raw item
+// list. Factored out so searchNoteByTitle (strict equality) and
+// FindNoteContainingID (most-recent match) can share the HTTP code.
+func joplinSearch(token, query string) ([]joplinNote, error) {
 	params := url.Values{
 		"token":     {token},
-		"query":     {title},
+		"query":     {query},
 		"type":      {"note"},
 		"fields":    {"id,title,created_time,body"},
 		"order_by":  {"created_time"},
@@ -176,12 +215,7 @@ func searchNoteByTitle(token, title string) (*joplinNote, error) {
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, err
 	}
-	for i := range result.Items {
-		if result.Items[i].Title == title {
-			return &result.Items[i], nil
-		}
-	}
-	return nil, nil
+	return result.Items, nil
 }
 
 // ─── resource fetching ───────────────────────────────────────────────────

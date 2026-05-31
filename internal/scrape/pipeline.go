@@ -25,31 +25,47 @@ func runOne(productURL string, preset *Preset, opts *flags) (*Brief, error) {
 	}
 
 	noteTitle := fmt.Sprintf("%s %s", presetTitlePrefix(preset.Name), id)
-	fmt.Fprintf(os.Stderr, "▶ [%s] clipping %s → Joplin[%s]\n", preset.Name, productURL, notebook)
-
-	noteID, err := qaiClip(productURL, notebook, noteTitle)
-	if err != nil {
-		return nil, fmt.Errorf("clip failed: %w", err)
-	}
 
 	token, err := joplinToken()
 	if err != nil {
 		return nil, err
 	}
 
-	// Prefer direct fetch by note ID (no index lag); fall back to
-	// title-search if clip didn't surface an ID for any reason.
 	var note *joplinNote
-	if noteID != "" {
-		note, err = getNoteByID(token, noteID)
+	if opts.noClip {
+		// User manually clipped via Joplin Web Clipper extension —
+		// the note exists in their library under whatever title the
+		// page's HTML <title> used. We locate it by full-text search
+		// for the product ID (which always appears in the canonical
+		// URL embedded in the clipped page).
+		fmt.Fprintf(os.Stderr, "▶ [%s] --no-clip: searching Joplin for note containing %s\n", preset.Name, id)
+		note, err = FindNoteContainingID(token, id)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ▶ direct fetch failed (%v), falling back to search\n", err)
+			return nil, fmt.Errorf("joplin search for %s failed: %w", id, err)
 		}
-	}
-	if note == nil {
-		note, err = findNoteByTitle(token, noteTitle)
-		if err != nil {
-			return nil, err
+		if note == nil {
+			return nil, fmt.Errorf("no Joplin note found containing %s — clip the page via the Joplin Web Clipper browser extension first, then retry", id)
+		}
+		fmt.Fprintf(os.Stderr, "  ▶ found note %q (id=%s)\n", note.Title, note.ID)
+	} else {
+		fmt.Fprintf(os.Stderr, "▶ [%s] clipping %s → Joplin[%s]\n", preset.Name, productURL, notebook)
+		noteID, clipErr := qaiClip(productURL, notebook, noteTitle)
+		if clipErr != nil {
+			return nil, fmt.Errorf("clip failed: %w", clipErr)
+		}
+		// Prefer direct fetch by note ID (no index lag); fall back to
+		// title-search if clip didn't surface an ID for any reason.
+		if noteID != "" {
+			note, err = getNoteByID(token, noteID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  ▶ direct fetch failed (%v), falling back to search\n", err)
+			}
+		}
+		if note == nil {
+			note, err = findNoteByTitle(token, noteTitle)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 

@@ -2,8 +2,16 @@ package scrape
 
 import (
 	"bytes"
+	"fmt"
+	"image"
 	"image/jpeg"
+	"os"
 	"regexp"
+
+	// Register PNG/JPEG decoders so image.DecodeConfig can read either
+	// without the caller knowing the format in advance. Importing for
+	// side effect — these init() calls register with image package.
+	_ "image/png"
 )
 
 // resourceRefRe matches Joplin markdown image references, which look
@@ -19,30 +27,79 @@ var resourceRefRe = regexp.MustCompile(`!\[[^\]]*\]\(:/([a-f0-9]{32})\)`)
 // banners precede it in the DOM but fail the aspect-ratio check, so
 // they get naturally filtered out before the hero is reached.
 func pickHero(token, noteBody string, f ImageFilters) ([]byte, error) {
-	for _, m := range resourceRefRe.FindAllStringSubmatch(noteBody, -1) {
+	debug := os.Getenv("QAI_SCRAPE_DEBUG") != ""
+	matches := resourceRefRe.FindAllStringSubmatch(noteBody, -1)
+	if debug {
+		fmt.Fprintf(os.Stderr, "  ▶ pickHero: %d refs in body, filters=%+v\n", len(matches), f)
+	}
+	seen := map[string]bool{}
+	for i, m := range matches {
 		resID := m[1]
+		if seen[resID] {
+			continue
+		}
+		seen[resID] = true
 
 		meta, err := getResourceMeta(token, resID)
 		if err != nil {
+			if debug {
+				fmt.Fprintf(os.Stderr, "    [%d] %s: meta err: %v\n", i, resID, err)
+			}
 			continue
 		}
 		if !extensionAllowed(meta, f) {
+			if debug {
+				fmt.Fprintf(os.Stderr, "    [%d] %s ext=%s mime=%s sz=%d: ext rejected\n", i, resID, meta.FileExt, meta.Mime, meta.Size)
+			}
+			continue
+		}
+		// Pre-skip: if size is below the byte floor AND below the
+		// expected hero dims (a 350×350 JPEG is ~30KB minimum), we
+		// can avoid downloading. For undecodable formats this is the
+		// primary signal anyway.
+		if f.MinSizeBytes > 0 && meta.Size < int64(f.MinSizeBytes) {
+			if debug {
+				fmt.Fprintf(os.Stderr, "    [%d] %s ext=%s sz=%d: below MinSizeBytes %d\n", i, resID, meta.FileExt, meta.Size, f.MinSizeBytes)
+			}
 			continue
 		}
 
 		data, err := getResourceFile(token, resID)
 		if err != nil {
+			if debug {
+				fmt.Fprintf(os.Stderr, "    [%d] %s: file err: %v\n", i, resID, err)
+			}
 			continue
 		}
 
-		w, h, ok := jpegDims(data)
-		if !ok {
-			continue
+		w, h, ok := decodeImageDims(data)
+		if ok {
+			if !dimsOK(w, h, f) {
+				if debug {
+					fmt.Fprintf(os.Stderr, "    [%d] %s ext=%s sz=%d dims=%dx%d: dims rejected\n", i, resID, meta.FileExt, meta.Size, w, h)
+				}
+				continue
+			}
+			if debug {
+				fmt.Fprintf(os.Stderr, "    [%d] %s ext=%s sz=%d dims=%dx%d: ACCEPTED\n", i, resID, meta.FileExt, meta.Size, w, h)
+			}
+			return data, nil
 		}
-		if !dimsOK(w, h, f) {
-			continue
+		// Dim decode failed (typically AVIF — Go stdlib doesn't decode
+		// it). The size-floor pre-check above already passed; accept
+		// this image as the hero.
+		if f.MinSizeBytes > 0 && len(data) >= f.MinSizeBytes {
+			if debug {
+				fmt.Fprintf(os.Stderr, "    [%d] %s ext=%s sz=%d: undecodable but size>=floor, ACCEPTED\n", i, resID, meta.FileExt, meta.Size)
+			}
+			return data, nil
 		}
-		return data, nil
+		if debug {
+			fmt.Fprintf(os.Stderr, "    [%d] %s ext=%s sz=%d: undecodable, no size floor\n", i, resID, meta.FileExt, meta.Size)
+		}
+	}
+	if debug {
+		fmt.Fprintf(os.Stderr, "  ▶ pickHero: walked all refs, nothing accepted\n")
 	}
 	return nil, nil
 }
@@ -52,9 +109,11 @@ func extensionAllowed(r *joplinResource, f ImageFilters) bool {
 	if f.JPEGOnly {
 		return ext == "jpg" || ext == "jpeg" || r.Mime == "image/jpeg" || r.Mime == "image/jpg"
 	}
-	// Permissive: allow jpg/png/webp.
+	// Permissive: allow jpg/png/webp/avif. AVIF is added for AliExpress
+	// which serves heroes as AVIF; the dim-decode falls back to byte-
+	// size filtering since Go stdlib can't decode AVIF natively.
 	switch ext {
-	case "jpg", "jpeg", "png", "webp":
+	case "jpg", "jpeg", "png", "webp", "avif":
 		return true
 	}
 	return false
@@ -88,10 +147,23 @@ func dimsOK(w, h int, f ImageFilters) bool {
 	return true
 }
 
-// jpegDims reads the JPEG header only (no full decode) to get
-// dimensions cheaply.
+// jpegDims is kept for the strict JPEGOnly callers — reads the JPEG
+// header without decoding pixels. New callers should use
+// decodeImageDims which tries every registered format.
 func jpegDims(data []byte) (w, h int, ok bool) {
 	cfg, err := jpeg.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return 0, 0, false
+	}
+	return cfg.Width, cfg.Height, true
+}
+
+// decodeImageDims uses the standard image package's DecodeConfig
+// dispatcher to read dimensions from JPEG or PNG headers (anything
+// else registered via blank-import). AVIF / WebP fall through with
+// ok=false; callers can fall back to byte-size filtering.
+func decodeImageDims(data []byte) (w, h int, ok bool) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return 0, 0, false
 	}

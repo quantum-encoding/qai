@@ -67,13 +67,19 @@ type Preset struct {
 //
 // JPEGOnly rejects PNGs outright — on most marketplaces, PNGs in
 // scraped dumps are logos, trust badges, or UI chrome, not hero shots.
-// Set it false for sites whose product heroes are PNG (rare).
+// Set it false for sites whose product heroes are PNG or AVIF (AE).
+//
+// MinSizeBytes is a byte-size floor used when dimension decoding is
+// unavailable (AVIF — Go stdlib doesn't decode it). When set, a
+// resource that exceeds this byte size passes even if dim-read fails;
+// when zero, dim-read failures cause the resource to be rejected.
 type ImageFilters struct {
 	MinW           int
 	MinH           int
 	MaxLongSide    int
 	MaxAspectRatio float64
 	JPEGOnly       bool
+	MinSizeBytes   int
 }
 
 // presets holds the registry, keyed by preset name.

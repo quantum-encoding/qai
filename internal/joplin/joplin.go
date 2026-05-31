@@ -18,6 +18,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -50,6 +52,34 @@ func New(cfg Config) *Client {
 	}
 }
 
+// LoadDefaultToken returns the Web Clipper API token from $JOPLIN_TOKEN,
+// or falls back to Joplin Desktop's ~/.config/joplin-desktop/settings.json
+// (api.token field). Used by callers that want the same automatic
+// resolution all qai subcommands use.
+func LoadDefaultToken() (string, error) {
+	if t := os.Getenv("JOPLIN_TOKEN"); t != "" {
+		return t, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("UserHomeDir: %w", err)
+	}
+	path := filepath.Join(home, ".config", "joplin-desktop", "settings.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("JOPLIN_TOKEN not set and %s unreadable: %w", path, err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return "", fmt.Errorf("parse %s: %w", path, err)
+	}
+	tok, _ := settings["api.token"].(string)
+	if tok == "" {
+		return "", fmt.Errorf("api.token missing from %s (enable Web Clipper in Joplin → Tools → Options)", path)
+	}
+	return tok, nil
+}
+
 // ── Types ───────────────────────────────────────────────────────────────────
 
 // Folder is a Joplin notebook — we expose only the fields the CLI uses.
@@ -61,9 +91,15 @@ type Folder struct {
 
 // Note is a single note record.
 type Note struct {
-	ID              string `json:"id"`
-	Title           string `json:"title"`
-	Body            string `json:"body,omitempty"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Body     string `json:"body,omitempty"`
+	// BodyHTML, when set, is converted to markdown by Joplin Desktop and
+	// any referenced images are downloaded as resources. This is the
+	// shape the Joplin Web Clipper extension itself uses — same image-
+	// preservation behaviour without round-tripping through our own
+	// markdown converter.
+	BodyHTML        string `json:"body_html,omitempty"`
 	ParentID        string `json:"parent_id,omitempty"`
 	SourceURL       string `json:"source_url,omitempty"`
 	UserCreatedTime int64  `json:"user_created_time,omitempty"`

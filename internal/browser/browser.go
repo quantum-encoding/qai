@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/quantum-encoding/qai-cli/internal/joplin"
 )
 
 // ─── port config ──────────────────────────────────────────────────────────
@@ -971,11 +973,14 @@ func browserClip(args []string) {
 		os.Exit(1)
 	}
 
-	// Get current page URL and title
+	// Extract URL, title, and outerHTML in one Runtime.evaluate call.
+	// outerHTML over innerHTML so the <html> + <head> + meta tags ride
+	// along — Joplin's converter uses meta refresh, canonical URL, and
+	// charset hints to clean up the body when it rewrites to markdown.
 	result, err := client.Call("Runtime.evaluate", map[string]any{
-		"expression":    "JSON.stringify({url: location.href, title: document.title})",
+		"expression":    `JSON.stringify({url: location.href, title: document.title, html: document.documentElement.outerHTML})`,
 		"returnByValue": true,
-	}, 5*time.Second)
+	}, 30*time.Second)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai browser: get page info: %v\n", err)
 		os.Exit(1)
@@ -991,8 +996,12 @@ func browserClip(args []string) {
 	var page struct {
 		URL   string `json:"url"`
 		Title string `json:"title"`
+		HTML  string `json:"html"`
 	}
-	json.Unmarshal([]byte(evalResult.Result.Value), &page)
+	if err := json.Unmarshal([]byte(evalResult.Result.Value), &page); err != nil {
+		fmt.Fprintf(os.Stderr, "qai browser clip: failed to decode page info: %v\n", err)
+		os.Exit(1)
+	}
 
 	if page.URL == "" {
 		fmt.Fprintln(os.Stderr, "qai browser clip: could not read current page URL (tab may be on chrome:// or about:blank)")
@@ -1000,20 +1009,62 @@ func browserClip(args []string) {
 		os.Exit(1)
 	}
 
-	// Use existing clip-to-joplin script with the live URL
+	// Positional args: [notebook] [title]. Defaults: "Clips" notebook,
+	// the page's HTML title.
 	clean := stripFlags(args)
-	notebook := "Clips"
+	notebookPath := "Clips"
 	title := page.Title
 	if len(clean) > 0 {
-		notebook = clean[0]
+		notebookPath = clean[0]
 	}
 	if len(clean) > 1 {
 		title = clean[1]
 	}
 
-	_ = notebook
-	_ = title
-	fmt.Fprintf(os.Stderr, "qai browser clip: use 'qai clip %s' instead\n", page.URL)
+	// Resolve notebook via the joplin package — supports `/`-delimited
+	// nested paths just like `qai clip` does.
+	token, err := joplin.LoadDefaultToken()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai browser clip: %v\n", err)
+		os.Exit(1)
+	}
+	baseURL := os.Getenv("JOPLIN_URL")
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:41184"
+	}
+	jc := joplin.New(joplin.Config{BaseURL: baseURL, Token: token})
+	folder, err := jc.FindOrCreateFolderPath(notebookPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai browser clip: notebook %q: %v\n", notebookPath, err)
+		fmt.Fprintln(os.Stderr, "  → fix: ensure Joplin Desktop is running and JOPLIN_TOKEN/settings.json is reachable")
+		os.Exit(1)
+	}
+
+	// Hand the captured HTML to Joplin. The Joplin Desktop /notes
+	// endpoint accepts body_html, converts to markdown, and downloads
+	// every referenced image as a Joplin resource — identical behaviour
+	// to what the Web Clipper browser extension itself does. The
+	// real-browser context means we get the user's logged-in view
+	// with fully-loaded heroes, not the headless anonymous version.
+	fmt.Fprintf(os.Stderr, "📎 Clipping current tab: %s\n", page.URL)
+	fmt.Fprintf(os.Stderr, "📁 Notebook: %s (id=%s)\n", notebookPath, folder.ID)
+	fmt.Fprintf(os.Stderr, "📐 HTML size: %d bytes\n", len(page.HTML))
+
+	note, err := jc.CreateNote(joplin.Note{
+		Title:     title,
+		BodyHTML:  page.HTML,
+		ParentID:  folder.ID,
+		SourceURL: page.URL,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai browser clip: CreateNote failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "✅ Clipped: %q\n", note.Title)
+	fmt.Fprintf(os.Stderr, "   Note ID: %s\n", note.ID)
+	// Stdout is the note ID alone so callers can pipe / capture it
+	// without scraping the human-friendly stderr.
+	fmt.Println(note.ID)
 }
 
 // ─── usage ────────────────────────────────────────────────────────────────

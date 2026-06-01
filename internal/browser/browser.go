@@ -51,24 +51,42 @@ func browserPort(args []string) int {
 	return defaultCDPPort
 }
 
-// stripFlags removes --port and --tab and their values from args.
+// stripFlags removes the value-bearing global flags + their values from
+// args, plus the boolean ones. Used by every command that walks `args`
+// for its own positional arguments — keeps positional parsing simple by
+// removing every flag the dispatcher recognises before the command
+// reads its tail.
+//
+// Value-bearing: --port --tab --selector --wait --theme -o --timeout
+// Boolean (no value):   --html --yes -y --help -h
 func stripFlags(args []string) []string {
+	valueFlags := map[string]bool{
+		"--port": true, "--tab": true,
+		"--selector": true, "--wait": true, "--theme": true,
+		"-o": true, "--timeout": true,
+	}
 	var out []string
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--port", "--tab":
+		if valueFlags[args[i]] {
 			i++ // skip value
-		default:
-			out = append(out, args[i])
+			continue
 		}
+		out = append(out, args[i])
 	}
 	return out
 }
 
 // tabIDFromArgs extracts --tab value.
 func tabIDFromArgs(args []string) string {
+	return flagValue(args, "--tab")
+}
+
+// flagValue returns the string that follows the named flag, or "" if
+// not present. Used by every command that accepts --selector / --wait
+// / --theme / -o. Returns the FIRST occurrence — duplicates lose.
+func flagValue(args []string, name string) string {
 	for i, a := range args {
-		if a == "--tab" && i+1 < len(args) {
+		if a == name && i+1 < len(args) {
 			return args[i+1]
 		}
 	}
@@ -500,6 +518,14 @@ func browserOpen(args []string) {
 		os.Exit(1)
 	}
 
+	// --theme applied before navigation so the requested-stylesheet
+	// pass already sees the override (matters for sites that gate
+	// dark-mode CSS on the media query at parse time).
+	if err := setTheme(client, flagValue(args, "--theme")); err != nil {
+		fmt.Fprintf(os.Stderr, "qai browser open: %v\n", err)
+		os.Exit(1)
+	}
+
 	_, err = client.Call("Page.navigate", map[string]any{"url": url}, 10*time.Second)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai browser: navigate: %v\n", err)
@@ -508,6 +534,16 @@ func browserOpen(args []string) {
 
 	// Wait for page load (best-effort, don't fail on timeout)
 	loadErr := client.WaitEvent("Page.loadEventFired", 15*time.Second)
+
+	// --wait <selector> blocks until the element appears or --timeout
+	// elapses. Runs AFTER Page.loadEventFired so the selector poll
+	// races against post-load JS, which is the case worth waiting on.
+	if waitSel := flagValue(args, "--wait"); waitSel != "" {
+		if err := waitForSelector(client, waitSel, parseWaitTimeout(args)); err != nil {
+			fmt.Fprintf(os.Stderr, "qai browser open: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	// Get final URL and title
 	result, err := client.Call("Runtime.evaluate", map[string]any{
@@ -627,56 +663,39 @@ func browserScreenshot(args []string) {
 		os.Exit(1)
 	}
 
-	result, err := client.Call("Page.captureScreenshot", map[string]any{
-		"format":  "png",
-		"quality": 80,
-	}, 10*time.Second)
+	if err := setTheme(client, flagValue(args, "--theme")); err != nil {
+		fmt.Fprintf(os.Stderr, "qai browser screenshot: %v\n", err)
+		os.Exit(1)
+	}
+	if waitSel := flagValue(args, "--wait"); waitSel != "" {
+		if err := waitForSelector(client, waitSel, parseWaitTimeout(args)); err != nil {
+			fmt.Fprintf(os.Stderr, "qai browser screenshot: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// --selector → clip to element bounding box; else full viewport.
+	// captureScreenshot handles the box-model resolution + clip params.
+	selector := flagValue(args, "--selector")
+	pngData, err := captureScreenshot(client, selector)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai browser: screenshot: %v\n", err)
 		os.Exit(1)
 	}
 
-	var ss struct {
-		Data string `json:"data"`
+	outFile := flagValue(args, "-o")
+	if outFile == "" {
+		outFile = fmt.Sprintf("screenshot-%s.png", time.Now().Format("20060102-150405"))
 	}
-	if err := json.Unmarshal(result, &ss); err != nil || ss.Data == "" {
-		fmt.Fprintln(os.Stderr, "qai browser: no screenshot data")
-		os.Exit(1)
-	}
-
-	pngData, err := base64.StdEncoding.DecodeString(ss.Data)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai browser: decode png: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Output file
-	outFile := fmt.Sprintf("screenshot-%s.png", time.Now().Format("20060102-150405"))
-	for _, a := range stripFlags(args) {
-		if a == "-o" {
-			continue
-		}
-		// Grab the value after -o
-		for i, b := range args {
-			if b == "-o" && i+1 < len(args) {
-				outFile = args[i+1]
-				break
-			}
-		}
-		break
-	}
-	// Simpler: just parse -o directly
-	for i, a := range args {
-		if a == "-o" && i+1 < len(args) {
-			outFile = args[i+1]
-		}
-	}
-
 	if err := os.WriteFile(outFile, pngData, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "qai browser: write %s: %v\n", outFile, err)
 		os.Exit(1)
 	}
-	fmt.Printf("saved: %s (%d bytes)\n", outFile, len(pngData))
+	scope := "viewport"
+	if selector != "" {
+		scope = fmt.Sprintf("element %q", selector)
+	}
+	fmt.Printf("saved: %s (%d bytes, %s)\n", outFile, len(pngData), scope)
 }
 
 func browserClick(args []string) {
@@ -862,34 +881,12 @@ func browserWait(args []string) {
 		}
 	}
 
-	deadline := time.Now().Add(timeout)
-	expr := fmt.Sprintf("document.querySelector(%q) !== null", sel)
-
-	for {
-		if time.Now().After(deadline) {
-			fmt.Fprintf(os.Stderr, "qai browser wait: timeout after %s waiting for selector %q\n", timeout, sel)
-			fmt.Fprintln(os.Stderr, "  → fix: increase timeout (e.g. 'qai browser wait <sel> 30'), or check the selector with 'qai browser eval \"document.querySelector(\\\"<sel>\\\")\"'")
-			os.Exit(1)
-		}
-
-		result, err := client.Call("Runtime.evaluate", map[string]any{
-			"expression":    expr,
-			"returnByValue": true,
-		}, 5*time.Second)
-		if err == nil {
-			var val struct {
-				Result struct {
-					Value bool `json:"value"`
-				} `json:"result"`
-			}
-			if json.Unmarshal(result, &val) == nil && val.Result.Value {
-				fmt.Printf("found: %s\n", sel)
-				return
-			}
-		}
-
-		time.Sleep(500 * time.Millisecond)
+	if err := waitForSelector(client, sel, timeout); err != nil {
+		fmt.Fprintf(os.Stderr, "qai browser wait: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  → fix: increase timeout (e.g. 'qai browser wait <sel> 30'), or check the selector with 'qai browser eval \"document.querySelector(\\\"<sel>\\\")\"'")
+		os.Exit(1)
 	}
+	fmt.Printf("found: %s\n", sel)
 }
 
 func browserSource(args []string) {
@@ -1091,11 +1088,15 @@ Commands:
   qai browser launch                      Start browser with debug port (auto-detects Brave/Chrome)
   qai browser list                        List open tabs
   qai browser open <url>                  Navigate to URL
+                                          Flags: --wait <css>, --theme light|dark, --timeout 30s
   qai browser tab <id>                    Activate a specific tab
   qai browser extract [--html]            Get page text (or HTML)
   qai browser screenshot [-o file.png]    Capture screenshot as PNG
+                                          Flags: --selector <css> (element-scoped),
+                                                 --wait <css>, --theme light|dark
   qai browser emulate <device> [url]      Render as a phone/tablet + screenshot (iOS/Android)
                                           Devices: iphone15, pixel7, galaxy-s23, ipad… ('emulate list')
+                                          Flags: --selector, --wait, --theme (as above)
   qai browser click <selector>            Click element by CSS selector
   qai browser click <x> <y>              Click at coordinates
   qai browser type "text"                 Type text character by character

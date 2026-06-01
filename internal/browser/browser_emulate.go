@@ -23,8 +23,6 @@
 package browser
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -204,6 +202,10 @@ func browserEmulate(args []string) {
 		fmt.Fprintf(os.Stderr, "qai browser emulate: %v\n", err)
 		os.Exit(1)
 	}
+	if err := setTheme(client, flagValue(args, "--theme")); err != nil {
+		fmt.Fprintf(os.Stderr, "qai browser emulate: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Fprintf(os.Stderr, "📱 emulating %s — %d×%d @%.3gx (%s)\n", p.label, p.width, p.height, p.dpr, p.os)
 
 	if url != "" {
@@ -217,38 +219,37 @@ func browserEmulate(args []string) {
 		time.Sleep(400 * time.Millisecond) // let layout/JS settle post-load
 	}
 
-	result, err := client.Call("Page.captureScreenshot", map[string]any{
-		"format": "png",
-	}, 15*time.Second)
+	// --wait <selector> AFTER load gives JS-driven content time to
+	// render before we capture. --selector limits the capture to one
+	// element's box. Both compose: wait for one selector, capture
+	// another, or capture the same one with both flags set.
+	if waitSel := flagValue(args, "--wait"); waitSel != "" {
+		if err := waitForSelector(client, waitSel, parseWaitTimeout(args)); err != nil {
+			fmt.Fprintf(os.Stderr, "qai browser emulate: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	selector := flagValue(args, "--selector")
+	pngData, err := captureScreenshot(client, selector)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai browser emulate: screenshot: %v\n", err)
 		os.Exit(1)
 	}
 
-	var ss struct {
-		Data string `json:"data"`
-	}
-	if err := json.Unmarshal(result, &ss); err != nil || ss.Data == "" {
-		fmt.Fprintln(os.Stderr, "qai browser emulate: no screenshot data")
-		os.Exit(1)
-	}
-	pngData, err := base64.StdEncoding.DecodeString(ss.Data)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai browser emulate: decode png: %v\n", err)
-		os.Exit(1)
-	}
-
-	outFile := fmt.Sprintf("emulate-%s-%s.png", key, time.Now().Format("20060102-150405"))
-	for i, a := range args {
-		if a == "-o" && i+1 < len(args) {
-			outFile = args[i+1]
-		}
+	outFile := flagValue(args, "-o")
+	if outFile == "" {
+		outFile = fmt.Sprintf("emulate-%s-%s.png", key, time.Now().Format("20060102-150405"))
 	}
 	if err := os.WriteFile(outFile, pngData, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "qai browser emulate: write %s: %v\n", outFile, err)
 		os.Exit(1)
 	}
-	fmt.Printf("saved: %s (%d bytes, %dpx wide)\n", outFile, len(pngData), int(float64(p.width)*p.dpr))
+	scope := fmt.Sprintf("%dpx wide", int(float64(p.width)*p.dpr))
+	if selector != "" {
+		scope = fmt.Sprintf("element %q", selector)
+	}
+	fmt.Printf("saved: %s (%d bytes, %s)\n", outFile, len(pngData), scope)
 }
 
 func emulateUsage() {
@@ -261,11 +262,22 @@ func emulateUsage() {
 
 	fmt.Fprint(os.Stderr, `qai browser emulate — render a page as a phone/tablet via CDP device mode
 
-  qai browser emulate <device> [url] [-o file.png]
+  qai browser emulate <device> [url] [-o file.png] [flags]
 
 Applies a mobile viewport, device-pixel-ratio, touch, and user-agent, then
 captures a screenshot. Navigate + capture happen on one connection because
 the override clears when the connection closes.
+
+Flags:
+  --selector <css>      Capture only the matched element's bounding box,
+                        not the full viewport. scrollIntoView first.
+  --wait <css>          After load, poll until <css> is in the DOM (or
+                        --timeout elapses) before capturing.
+  --theme light|dark    Force prefers-color-scheme via
+                        Emulation.setEmulatedMedia. Applied pre-load
+                        so first-paint sees the right media query.
+  --timeout <dur>       Cap for --wait (default 10s; "5", "5s", "1m" all parse).
+  -o <file>             Output filename (default emulate-<device>-<ts>.png).
 
 NOTE: this is Blink rendering a mobile viewport (Chrome DevTools device mode),
 not WebKit. It reproduces responsive layout, viewport sizing, touch, and any
@@ -284,6 +296,9 @@ Aliases: iphone→iphone15, ios→iphone15, pixel/android→pixel7, galaxy→gal
 Examples:
   qai browser emulate iphone15 https://example.com -o ios.png
   qai browser emulate pixel7   https://example.com -o android.png
-  qai browser emulate galaxy-s23                 # emulate current tab, auto-named file
+  qai browser emulate galaxy-s23                                 # current tab, auto-named
+  qai browser emulate iphone15 https://x.com --selector header   # just the header element
+  qai browser emulate iphone15 https://x.com --theme dark        # forced dark mode
+  qai browser emulate iphone15 https://x.com --wait "main.loaded" # wait for JS-driven content
 `)
 }

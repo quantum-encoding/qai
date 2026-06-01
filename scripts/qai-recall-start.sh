@@ -29,6 +29,15 @@
 
 set -euo pipefail
 
+# Clear the qai edit-target pointer so the previous session's last
+# edit doesn't drive THIS session's project tag. Written by the
+# qai-target-from-edits PostToolUse hook; consumed by projectid.Resolve.
+# An empty file is treated as "no override" so the resolver falls
+# through to cwd cleanly.
+if [[ -f "$HOME/.qai/target-edit-path" ]]; then
+  printf '' > "$HOME/.qai/target-edit-path" 2>/dev/null || true
+fi
+
 if ! command -v qai >/dev/null 2>&1; then
   exit 0
 fi

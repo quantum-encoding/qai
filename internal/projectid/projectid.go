@@ -57,11 +57,36 @@ import (
 type Source string
 
 const (
+	SourceEditTarget  Source = "edit-target"  // ~/.qai/target-edit-path (last file the agent wrote)
 	SourceOverride    Source = "override"     // .qai/project file
 	SourceManifest    Source = "manifest"     // package.json / Cargo.toml / pyproject.toml / go.mod
 	SourceGitRoot     Source = "git-root"     // basename of the dir containing .git
 	SourceCwdBasename Source = "cwd-basename" // last-ditch bare cwd
 )
+
+// EditTargetFile is the well-known path a Claude Code PostToolUse hook
+// writes to when the agent edits a file. Resolve checks this BEFORE
+// the cwd-based chain so a session launched from one repo but doing
+// the actual work in another tags correctly. The path stored is the
+// absolute file path; the resolver walks from its dirname through the
+// same manifest/git-root rules.
+//
+// Cleared by the SessionStart hook to prevent the previous session's
+// target bleeding into a fresh session. Empty/missing file → fall
+// through to the cwd-based rules. Override is *optional*; cwd
+// resolution stays the default.
+var EditTargetFile = ""
+
+func editTargetFilePath() string {
+	if EditTargetFile != "" {
+		return EditTargetFile // test seam
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".qai", "target-edit-path")
+}
 
 // Result is what Resolve returns — the sanitised tag, the rule that
 // produced it, and (for manifest hits) the path of the manifest file
@@ -109,21 +134,41 @@ var noiseSet = map[string]bool{
 // process cwd; the caller is responsible for resolving symlinks if
 // they care about canonical paths (we don't, since both the .git walk
 // and the manifest walk treat paths as opaque strings).
+//
+// The cwd-anchored chain runs through resolveFrom; an edit-target
+// override (the Claude Code hook surface) runs first and tries the
+// same chain against the dirname of whatever file the agent last
+// touched. If that produces nothing usable (noise / missing dir /
+// empty file), Resolve falls back to the cwd chain so the override is
+// never failure-inducing — only failure-redirecting.
 func Resolve(cwd string) (*Result, error) {
 	if cwd == "" {
 		return nil, fmt.Errorf("project resolver: empty cwd")
 	}
 	cwd = filepath.Clean(cwd)
 
+	// -1. Edit-target override (Claude Code hook). Anchored on the
+	//     dirname of the last-edited file rather than cwd. On any
+	//     failure path (missing file / unreadable / noise / nothing
+	//     resolves), fall through to the cwd-anchored chain.
+	if r := resolveEditTarget(); r != nil {
+		return r, nil
+	}
+
+	return resolveFrom(cwd)
+}
+
+// resolveFrom runs the cwd-anchored resolution chain (override walk,
+// manifest-before-git-root, bare cwd basename) against the given
+// starting directory. Extracted from Resolve so the edit-target
+// override can run the same chain against a different anchor.
+func resolveFrom(cwd string) (*Result, error) {
 	// 0. .qai/project override — searched first, beats everything.
 	if r := resolveOverride(cwd); r != nil {
 		return r, nil
 	}
 
-	// 1+2. Manifest-before-git-root walk. We walk in one pass; the
-	// first thing we hit decides the outcome. A manifest beats a
-	// .git encounter at the same level (manifest is checked first in
-	// the loop body), which gives the monorepo case the right answer.
+	// 1+2. Manifest-before-git-root walk.
 	if r := resolveManifestOrGitRoot(cwd); r != nil {
 		return r, nil
 	}
@@ -138,6 +183,44 @@ func Resolve(cwd string) (*Result, error) {
 		Source:  SourceCwdBasename,
 		RawName: base,
 	}, nil
+}
+
+// resolveEditTarget reads the edit-target pointer file (written by the
+// Claude Code PostToolUse hook), and runs the cwd-anchored chain
+// against the dirname of the stored path. Returns nil on any failure
+// path so Resolve falls through cleanly to its cwd chain.
+//
+// The Source is rewritten to SourceEditTarget so diagnostics show
+// that the hook fired, even if the underlying anchor was a manifest
+// or git-root walk against the target dir.
+func resolveEditTarget() *Result {
+	p := editTargetFilePath()
+	if p == "" {
+		return nil
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil // missing file = no override
+	}
+	target := strings.TrimSpace(string(data))
+	if target == "" {
+		return nil
+	}
+	dir := filepath.Dir(target)
+	if dir == "" || dir == "." {
+		return nil
+	}
+	r, err := resolveFrom(dir)
+	if err != nil || r == nil {
+		return nil
+	}
+	// Preserve diagnostics on the underlying anchor by keeping the
+	// ManifestPath; rewrite Source so callers can see the hook fired.
+	r.Source = SourceEditTarget
+	if r.ManifestPath == "" {
+		r.ManifestPath = target
+	}
+	return r
 }
 
 // resolveOverride walks upward looking for .qai/project. First hit

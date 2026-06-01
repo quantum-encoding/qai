@@ -253,6 +253,114 @@ func TestSanitiseAppliedToManifest(t *testing.T) {
 	}
 }
 
+// ── edit-target hook surface ────────────────────────────────────────────
+
+// TestResolveEditTargetOverridesCwd — the load-bearing case for the
+// Claude Code hook. Session launched from repo A; agent's edits are
+// landing in repo B. Resolve(A) must return B because the hook wrote
+// the target file pointing at a file in B.
+func TestResolveEditTargetOverridesCwd(t *testing.T) {
+	cwd := t.TempDir()
+	writeFile(t, filepath.Join(cwd, "go.mod"), "module github.com/x/source-repo\n")
+
+	target := t.TempDir()
+	writeFile(t, filepath.Join(target, "go.mod"), "module github.com/x/target-repo\n")
+	editedFile := filepath.Join(target, "src", "main.go")
+	mustMkdirAll(t, filepath.Dir(editedFile))
+	writeFile(t, editedFile, "package main\n")
+
+	pointer := filepath.Join(t.TempDir(), "target-edit-path")
+	writeFile(t, pointer, editedFile+"\n")
+	withEditTarget(t, pointer)
+
+	r, err := Resolve(cwd)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.Source != SourceEditTarget {
+		t.Errorf("Source = %v, want %v", r.Source, SourceEditTarget)
+	}
+	if r.Project != "target-repo" {
+		t.Errorf("Project = %q, want %q (cwd resolved to source-repo — hook ignored)",
+			r.Project, "target-repo")
+	}
+}
+
+// TestResolveEditTargetMissingFileFallsThrough — no edit-target file
+// means cwd-based resolution runs unchanged.
+func TestResolveEditTargetMissingFileFallsThrough(t *testing.T) {
+	cwd := t.TempDir()
+	writeFile(t, filepath.Join(cwd, "go.mod"), "module github.com/x/cwd-wins\n")
+
+	withEditTarget(t, filepath.Join(t.TempDir(), "missing-target-file"))
+
+	r, err := Resolve(cwd)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.Source != SourceManifest {
+		t.Errorf("Source = %v, want %v (cwd manifest)", r.Source, SourceManifest)
+	}
+	if r.Project != "cwd-wins" {
+		t.Errorf("Project = %q, want cwd-wins", r.Project)
+	}
+}
+
+// TestResolveEditTargetEmptyFileFallsThrough — a present-but-empty
+// edit-target file (e.g. SessionStart cleared it) falls through.
+func TestResolveEditTargetEmptyFileFallsThrough(t *testing.T) {
+	cwd := t.TempDir()
+	writeFile(t, filepath.Join(cwd, "go.mod"), "module github.com/x/cwd-wins\n")
+
+	emptyTarget := filepath.Join(t.TempDir(), "edit-target")
+	writeFile(t, emptyTarget, "")
+	withEditTarget(t, emptyTarget)
+
+	r, err := Resolve(cwd)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if r.Project != "cwd-wins" {
+		t.Errorf("Project = %q, want cwd-wins (empty edit-target)", r.Project)
+	}
+}
+
+// TestResolveEditTargetNonResolvableFallsThrough — edit-target points
+// at /tmp/something.txt where no manifest or git root exists and the
+// basename is in the noise list. Resolver must NOT propagate the noise
+// error; it should fall through to cwd.
+func TestResolveEditTargetNonResolvableFallsThrough(t *testing.T) {
+	cwd := t.TempDir()
+	writeFile(t, filepath.Join(cwd, "go.mod"), "module github.com/x/cwd-wins\n")
+
+	// Edited path lives under a noise-list basename ("src") with no
+	// manifest or .git anywhere up the chain. Edit-target resolution
+	// must NOT propagate the ErrNoise back to the caller; it should
+	// fall through to the cwd chain.
+	noisePath := filepath.Join(t.TempDir(), "src", "scratch.txt")
+	mustMkdirAll(t, filepath.Dir(noisePath))
+	pointer := filepath.Join(t.TempDir(), "target-edit-path")
+	writeFile(t, pointer, noisePath+"\n")
+	withEditTarget(t, pointer)
+
+	r, err := Resolve(cwd)
+	if err != nil {
+		t.Fatalf("Resolve: %v (should fall through, not return ErrNoise)", err)
+	}
+	if r.Project != "cwd-wins" {
+		t.Errorf("Project = %q, want cwd-wins (noise path → fall through)", r.Project)
+	}
+}
+
+// withEditTarget swaps the package-level EditTargetFile for the test
+// duration. Restored on cleanup.
+func withEditTarget(t *testing.T, path string) {
+	t.Helper()
+	prev := EditTargetFile
+	EditTargetFile = path
+	t.Cleanup(func() { EditTargetFile = prev })
+}
+
 // ── tiny test helpers ────────────────────────────────────────────────────
 
 func writeFile(t *testing.T, path, content string) {

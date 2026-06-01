@@ -10,13 +10,16 @@ package cj
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+
+	"github.com/quantum-encoding/qai-cli/internal/joplin"
 )
 
 // CmdCJ dispatches `qai cj <sub>`. Wired from cmd/qai/main.go.
 func CmdCJ(args []string) {
 	if len(args) == 0 || isHelp(args[0]) {
-		fmt.Println(helpCJ)
+		os.Stdout.WriteString(helpCJ + "\n")
 		return
 	}
 	sub := args[0]
@@ -35,33 +38,65 @@ func isHelp(s string) bool { return s == "--help" || s == "-h" || s == "help" }
 
 func cmdExtract(args []string) {
 	if len(args) == 0 || isHelp(args[0]) {
-		fmt.Println(helpExtract)
+		os.Stdout.WriteString(helpExtract + "\n")
 		return
 	}
-	summary := false
-	var file string
-	for _, a := range args {
+	var (
+		summary    bool
+		strict     bool
+		joplinRef  string // ID or title pattern
+		file       string
+		readStdin  bool
+	)
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch a {
 		case "--summary":
 			summary = true
+		case "--strict":
+			strict = true
 		case "--json":
 			// implied; accept for symmetry
+		case "--joplin":
+			if i+1 >= len(args) {
+				dieMissing("--joplin <note-id | title-pattern>")
+			}
+			joplinRef = args[i+1]
+			i++
+		case "-":
+			readStdin = true
 		default:
-			if file == "" {
+			if file == "" && !looksLikeFlag(a) {
 				file = a
 			}
 		}
 	}
-	if file == "" {
-		fmt.Fprintln(os.Stderr, "qai cj extract: missing markdown file path")
-		fmt.Fprintln(os.Stderr, "  → fix: qai cj extract <path/to/clip.md>")
-		os.Exit(1)
-	}
-	r, err := ParseFile(file)
+
+	// Source resolution — exactly one of {file, stdin, joplin} must
+	// produce the markdown body. Order matters: explicit --joplin
+	// wins over file/stdin if both are provided, since it's the more
+	// specific intent.
+	source, body, err := loadSource(joplinRef, file, readStdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai cj extract: %v\n", err)
 		os.Exit(1)
 	}
+
+	r := Parse(body)
+	r.SourceFile = source
+
+	if strict && r.Counts.CJProducts == 0 && r.Counts.Competitors == 0 {
+		// Catch the "clip didn't land on a CJ page" failure mode.
+		// In a pipeline this is the difference between "extracted
+		// nothing useful" and "the clip silently failed". Exit 3
+		// matches the other invocation-error exits across qai.
+		fmt.Fprintln(os.Stderr,
+			"qai cj extract --strict: 0 CJ products and 0 competitors — likely not a CJ intelligence clip")
+		fmt.Fprintln(os.Stderr,
+			"  → fix: verify the source page, or omit --strict to accept empty results")
+		os.Exit(3)
+	}
+
 	if summary {
 		printSummary(r)
 		return
@@ -69,6 +104,117 @@ func cmdExtract(args []string) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(r)
+}
+
+// loadSource resolves the markdown body from one of three inputs:
+//   - --joplin <ref> → fetch via Joplin REST API (ref is ID or title)
+//   - "-"            → read stdin
+//   - file path      → read file
+//
+// Returns (source-label, body, err). The source-label is used as the
+// payload's source_file field for traceability; for stdin it's "-",
+// for Joplin it's the note ID.
+func loadSource(joplinRef, file string, readStdin bool) (string, string, error) {
+	switch {
+	case joplinRef != "":
+		body, id, err := fetchFromJoplin(joplinRef)
+		if err != nil {
+			return "", "", err
+		}
+		return "joplin:" + id, body, nil
+	case readStdin:
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", "", fmt.Errorf("read stdin: %w", err)
+		}
+		return "-", string(data), nil
+	case file != "":
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return "", "", fmt.Errorf("read %s: %w", file, err)
+		}
+		return file, string(data), nil
+	default:
+		return "", "", fmt.Errorf("missing markdown source — pass a file path, '-' for stdin, or --joplin <id-or-title>")
+	}
+}
+
+// fetchFromJoplin loads a note's body via the Joplin REST API. The
+// ref disambiguates by shape:
+//
+//   - 32-char hex → treat as note ID, GET /notes/<id>?fields=body
+//   - anything else → treat as title pattern, /search?type=note&query=,
+//     take the first result (Joplin search orders by updated_at DESC,
+//     so this is the most-recently-modified matching note).
+//
+// Returns (body, note-id, err) so the source label carries the
+// resolved ID even when the caller passed a title.
+func fetchFromJoplin(ref string) (string, string, error) {
+	token, err := joplin.LoadDefaultToken()
+	if err != nil {
+		return "", "", err
+	}
+	base := os.Getenv("JOPLIN_URL")
+	if base == "" {
+		base = "http://127.0.0.1:41184"
+	}
+	c := joplin.New(joplin.Config{BaseURL: base, Token: token})
+
+	if looksLikeNoteID(ref) {
+		note, err := c.GetNote(ref, "id", "title", "body")
+		if err != nil {
+			return "", "", fmt.Errorf("get note %s: %w", ref, err)
+		}
+		if note == nil {
+			return "", "", fmt.Errorf("note %s not found", ref)
+		}
+		return note.Body, note.ID, nil
+	}
+
+	// Title pattern. SearchNotes returns user_updated_time DESC, so
+	// item[0] is the freshest. Request body explicitly — the default
+	// search projection doesn't include it.
+	results, err := c.SearchNotes(ref, 5, "id", "title", "body")
+	if err != nil {
+		return "", "", fmt.Errorf("search %q: %w", ref, err)
+	}
+	if len(results) == 0 {
+		return "", "", fmt.Errorf("no Joplin note matches %q", ref)
+	}
+	hit := results[0]
+	if hit.Body == "" {
+		// Fall back to a direct GetNote — some Joplin builds drop
+		// body in search results regardless of the fields param.
+		full, gerr := c.GetNote(hit.ID, "id", "title", "body")
+		if gerr != nil {
+			return "", "", fmt.Errorf("search %q matched %s but body fetch failed: %w", ref, hit.ID, gerr)
+		}
+		return full.Body, full.ID, nil
+	}
+	return hit.Body, hit.ID, nil
+}
+
+// looksLikeNoteID matches Joplin's 32-char hex ID shape. Anything else
+// is treated as a title pattern.
+func looksLikeNoteID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeFlag(s string) bool {
+	return len(s) > 1 && s[0] == '-'
+}
+
+func dieMissing(what string) {
+	fmt.Fprintf(os.Stderr, "qai cj extract: missing value for %s\n", what)
+	os.Exit(1)
 }
 
 // printSummary is the human-skim view for sanity-checking a clip
@@ -108,16 +254,21 @@ competitor-demand JSON so a downstream consumer (Surreal, sqlite,
 spreadsheet, prompt) can avoid re-deriving the regex per session.
 
 USAGE
-  qai cj extract <clip.md>            Emit JSON of products + competitors
-  qai cj extract <clip.md> --summary  Human-skim view
+  qai cj extract <clip.md>             Read markdown from a file
+  qai cj extract -                     Read markdown from stdin
+  qai cj extract --joplin <id>         Fetch a Joplin note by 32-char ID
+  qai cj extract --joplin "<title>"    Find latest matching note by title
+  qai cj extract ... --summary         Human-skim view
+  qai cj extract ... --strict          Exit 3 if nothing extracted
 
-WORKFLOW
-  1. Clip a category page from cjdropshipping.com/intelligence/sales-trends
-     using the Joplin Web Clipper (renders the React page like a human,
-     bypasses the bot wall, preserves all the data).
-  2. Run 'qai cj extract <clip.md>' to get JSON.
-  3. Pipeline JSON into your boarding script (project-specific SQL,
-     SurrealDB insert, whatever).
+WORKFLOW (fully scripted)
+  qai browser open "<cj-intelligence-url>"
+  qai browser wait "table" --timeout 30s         # React done rendering
+  NOTE_ID=$(qai browser clip "cj/clips" "Pet Supplies $(date +%F)")
+  qai cj extract --joplin "$NOTE_ID" | jq '.competitors[0:5]'
+
+  Or for a fresh session that already clipped earlier:
+  qai cj extract --joplin "Sales Trends" --strict | …  # most recent match
 
 OUTPUT (schema)
   {
@@ -138,6 +289,9 @@ EXAMPLES
   qai cj extract ~/Documents/dropship/clip.md
   qai cj extract clip.md | jq '.cj_products[] | {pid, title, price_min}'
   qai cj extract clip.md | jq '.competitors | sort_by(.sales_usd_num) | reverse | .[0:5]'
-  qai cj extract clip.md --summary`
+  qai cj extract clip.md --summary
+  curl -s https://example.com/clip.md | qai cj extract -
+  qai cj extract --joplin a1b2c3d4e5f67890a1b2c3d4e5f67890
+  qai cj extract --joplin "Sales Trends" --strict | jq '.counts'`
 
 const helpExtract = helpCJ

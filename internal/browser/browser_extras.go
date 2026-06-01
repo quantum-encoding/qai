@@ -50,13 +50,29 @@ func waitForSelector(c *cdpClient, sel string, timeout time.Duration) error {
 
 // setTheme forces prefers-color-scheme via Emulation.setEmulatedMedia.
 // Accepts "light", "dark", or "" (no-op). Returns error on invalid
-// value or CDP failure. Persists for the lifetime of the session
-// (until the websocket detaches), so emulate's "do everything on one
-// connection" pattern keeps the theme applied through navigation.
+// value or CDP failure. Persists for the lifetime of the session.
 //
-// CDP shape: Emulation.setEmulatedMedia({features: [{name, value}]}).
-// The features list overrides ONE media feature at a time; we set
-// prefers-color-scheme only. Passing the empty list clears overrides.
+// The flake-free path — what the function actually does:
+//
+//   1. Emulation.setEmulatedMedia({features:[{prefers-color-scheme,X}]})
+//      → browser process stores the override and ACKs.
+//   2. Runtime.evaluate of matchMedia('(prefers-color-scheme:X)').matches
+//      → forces a RENDERER round-trip and returns only after the
+//        renderer has processed every prior browser-process command,
+//        including the emulation override.
+//
+// Without step 2, the next CDP call (typically Page.navigate) can
+// out-race the emulation override across browser→renderer IPC because
+// the two domains use separate processing paths. The browser ACK in
+// step 1 only confirms "browser process queued it", not "renderer
+// applied it" — so a navigation request can hit the renderer's
+// document-creation pipeline before the override does, leaving the
+// new page rendering against the OS-default prefers-color-scheme.
+//
+// We don't check the matchMedia return value; the value is irrelevant.
+// The CALL is the barrier — its existence forces ordering. Empirical
+// fix for the flake observed when --theme + Page.navigate were chained
+// without this step.
 func setTheme(c *cdpClient, theme string) error {
 	if theme == "" {
 		return nil
@@ -67,10 +83,21 @@ func setTheme(c *cdpClient, theme string) error {
 	default:
 		return fmt.Errorf("--theme must be 'light' or 'dark' (got %q)", theme)
 	}
-	_, err := c.Call("Emulation.setEmulatedMedia", map[string]any{
+	if _, err := c.Call("Emulation.setEmulatedMedia", map[string]any{
 		"features": []map[string]string{
 			{"name": "prefers-color-scheme", "value": theme},
 		},
+	}, 5*time.Second); err != nil {
+		return err
+	}
+	// Renderer barrier — see function comment. The expression touches
+	// matchMedia so the renderer's style system has to evaluate the
+	// override before it can answer; absent that, the call would
+	// return immediately and the barrier would be vacuous.
+	_, err := c.Call("Runtime.evaluate", map[string]any{
+		"expression": fmt.Sprintf(
+			`matchMedia('(prefers-color-scheme: %s)').matches`, theme),
+		"returnByValue": true,
 	}, 5*time.Second)
 	return err
 }

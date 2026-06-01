@@ -20,6 +20,7 @@ import (
 	"github.com/quantum-encoding/qai-cli/internal/blast"
 	"github.com/quantum-encoding/qai-cli/internal/browser"
 	"github.com/quantum-encoding/qai-cli/internal/chat"
+	"github.com/quantum-encoding/qai-cli/internal/cj"
 	"github.com/quantum-encoding/qai-cli/internal/compile"
 	"github.com/quantum-encoding/qai-cli/internal/conduct"
 	"github.com/quantum-encoding/qai-cli/internal/media"
@@ -153,6 +154,8 @@ func main() {
 		i18n.Cmd(args) // handles its own --help
 	case "clip":
 		cmdClip(args)
+	case "cj":
+		cj.CmdCJ(args) // handles its own --help
 	case "joplin":
 		joplinops.CmdJoplin(args) // handles its own --help
 	case "scrape":

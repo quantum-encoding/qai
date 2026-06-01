@@ -80,6 +80,14 @@ func tabIDFromArgs(args []string) string {
 // connectToTab discovers tabs, selects one, connects via WebSocket, and
 // injects stealth. Most commands call this as their first step.
 func connectToTab(args []string) (*cdpClient, *cdpTab, error) {
+	return connectToTabOpts(args, true)
+}
+
+// connectToTabOpts is connectToTab with control over stealth injection.
+// Device emulation passes stealth=false: the stealth script pins
+// navigator.platform to MacIntel and maxTouchPoints to 0, which would
+// override the very mobile fingerprint emulation is trying to install.
+func connectToTabOpts(args []string, stealth bool) (*cdpClient, *cdpTab, error) {
 	port := browserPort(args)
 	tabs, err := cdpListTabs(port)
 	if err != nil {
@@ -127,7 +135,9 @@ func connectToTab(args []string) (*cdpClient, *cdpTab, error) {
 	client.Call("DOM.enable", nil, 5*time.Second)
 
 	// Inject stealth
-	injectStealth(client)
+	if stealth {
+		injectStealth(client)
+	}
 
 	return client, target, nil
 }
@@ -270,6 +280,8 @@ func CmdBrowser(args []string) {
 		browserExtract(rest)
 	case "screenshot", "ss":
 		browserScreenshot(rest)
+	case "emulate", "device", "mobile":
+		browserEmulate(rest)
 	case "click":
 		browserClick(rest)
 	case "type":
@@ -1082,6 +1094,8 @@ Commands:
   qai browser tab <id>                    Activate a specific tab
   qai browser extract [--html]            Get page text (or HTML)
   qai browser screenshot [-o file.png]    Capture screenshot as PNG
+  qai browser emulate <device> [url]      Render as a phone/tablet + screenshot (iOS/Android)
+                                          Devices: iphone15, pixel7, galaxy-s23, ipad… ('emulate list')
   qai browser click <selector>            Click element by CSS selector
   qai browser click <x> <y>              Click at coordinates
   qai browser type "text"                 Type text character by character

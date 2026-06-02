@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"os/exec"
 	"strconv"
@@ -83,11 +84,13 @@ func cmdBatch(args []string) {
 		// non-CJ pages or grid layouts that use different selectors.
 		waitSel = `a[href*="/product/"]`
 		timeout = "30s"
-		outFile  string
-		tab      string
-		summary  bool
-		strict   bool
-		softWait bool
+		outFile    string
+		tab        string
+		summary    bool
+		strict     bool
+		softWait   bool
+		maxRetries = 3
+		retryBase  = 30 * time.Second
 	)
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -117,6 +120,22 @@ func cmdBatch(args []string) {
 			strict = true
 		case "--soft-wait":
 			softWait = true
+		case "--max-retries":
+			n, err := strconv.Atoi(nextArg(args, i, "--max-retries"))
+			if err != nil || n < 0 {
+				fmt.Fprintf(os.Stderr, "qai cj batch: --max-retries must be >= 0\n")
+				os.Exit(1)
+			}
+			maxRetries = n
+			i++
+		case "--retry-base":
+			d, err := time.ParseDuration(nextArg(args, i, "--retry-base"))
+			if err != nil || d <= 0 {
+				fmt.Fprintf(os.Stderr, "qai cj batch: --retry-base invalid duration: %q\n", args[i+1])
+				os.Exit(1)
+			}
+			retryBase = d
+			i++
 		case "--json":
 			// implied
 		default:
@@ -180,7 +199,8 @@ func cmdBatch(args []string) {
 		if i > 0 && delayMS > 0 {
 			time.Sleep(time.Duration(delayMS) * time.Millisecond)
 		}
-		run := processOne(entry, notebook, tab, waitSel, timeout, softWait, joplinClient)
+		run := processOne(entry, notebook, tab, waitSel, timeout, softWait,
+			maxRetries, retryBase, joplinClient)
 		result.Runs = append(result.Runs, run)
 		if run.Error != "" {
 			result.Counts.Failed++
@@ -231,22 +251,56 @@ var processProducts = map[string][]CJProduct{}
 // clip whatever's on the page. Useful when CJ's anti-bot is throttling
 // the session and you'd rather get a skeleton-state clip you can
 // inspect than a clean failure.
-func processOne(entry batchEntry, notebook, tab, waitSel, timeout string, softWait bool, jc *joplin.Client) BatchRun {
+//
+// Retry policy: when `qai browser open --wait` times out (the CJ-
+// throttle signature: stderr contains "timeout after … waiting for
+// selector"), we sleep `backoff(attempt, retryBase)` and re-navigate.
+// Up to maxRetries times. Non-throttle errors (security gate, bad URL,
+// browser unreachable) fail immediately — backoff won't help those.
+func processOne(entry batchEntry, notebook, tab, waitSel, timeout string,
+	softWait bool, maxRetries int, retryBase time.Duration,
+	jc *joplin.Client) BatchRun {
 	run := BatchRun{URL: entry.URL, Label: entry.Label}
 
-	// 1. Navigate + wait. qai browser open with --wait + --timeout
-	//    blocks until either the selector appears or the timeout
-	//    elapses. Errors here include security-gate denials.
-	if err := runQaiBrowser("open", entry.URL, "--wait", waitSel,
-		"--timeout", timeout, "--tab", tab); err != nil {
+	// 1. Navigate + wait, with throttle-aware retry.
+	openArgs := []string{"open", entry.URL, "--wait", waitSel,
+		"--timeout", timeout, "--tab", tab}
+	var lastErr error
+	var lastStderr string
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		stderr, err := runQaiBrowserCaptureStderr(openArgs...)
+		if err == nil {
+			lastErr = nil
+			lastStderr = ""
+			break
+		}
+		lastErr = err
+		lastStderr = stderr
+		if !looksLikeThrottle(stderr) || attempt == maxRetries {
+			break
+		}
+		delay := backoff(attempt, retryBase)
+		fmt.Fprintf(os.Stderr,
+			"    throttle on attempt %d/%d — backing off %s before retry\n",
+			attempt+1, maxRetries+1, delay)
+		time.Sleep(delay)
+	}
+	if lastErr != nil {
+		// Surface the navigate stderr to the user — they don't see it
+		// otherwise since we captured it. Cuts trailing newlines so the
+		// batch log stays clean.
+		stderrTrim := strings.TrimRight(lastStderr, "\n ")
+		if stderrTrim != "" {
+			fmt.Fprintln(os.Stderr, "    "+stderrTrim)
+		}
 		if !softWait {
-			run.Error = "navigate: " + err.Error()
+			run.Error = "navigate: " + lastErr.Error()
 			return run
 		}
 		// Soft-wait: record the timeout but keep going. The downstream
 		// counts (0 products) will already flag that the page wasn't
 		// ready; the human can inspect the resulting note manually.
-		fmt.Fprintf(os.Stderr, "    soft-wait: %s — clipping skeleton state anyway\n", err)
+		fmt.Fprintf(os.Stderr, "    soft-wait: clipping skeleton state anyway\n")
 	}
 
 	// 2. Clip. Stdout is the note ID alone.
@@ -293,11 +347,56 @@ func safeErr(err error) string {
 	return err.Error()
 }
 
-func runQaiBrowser(subArgs ...string) error {
+// runQaiBrowserCaptureStderr runs `qai browser <subArgs>` and returns
+// the captured stderr so the navigate retry loop can scan it for the
+// throttle signature without leaking partial timeout messages to the
+// user when we're about to retry anyway.
+func runQaiBrowserCaptureStderr(subArgs ...string) (string, error) {
 	args := append([]string{"browser"}, subArgs...)
 	cmd := exec.Command(qaiBinary(), args...)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	var sb strings.Builder
+	cmd.Stderr = &sb
+	err := cmd.Run()
+	return sb.String(), err
+}
+
+// looksLikeThrottle returns true when a `qai browser open --wait`
+// stderr matches the CJ-throttle signature: a clean wait-selector
+// timeout with no other error. This is the signal we should back off
+// and retry; security-gate denials, network errors, etc. produce
+// different stderr and aren't retried (backoff won't help).
+func looksLikeThrottle(stderr string) bool {
+	return strings.Contains(stderr, "timeout after") &&
+		strings.Contains(stderr, "waiting for selector")
+}
+
+// backoff returns the delay before retry attempt N (0-indexed).
+// Exponential 2^attempt × base, plus uniform jitter in
+// [-base/4, +base/4) to desynchronise concurrent batches, capped at
+// 5 minutes so a long tail of retries doesn't stall the whole batch.
+//
+// The jitter offset is centered on zero so the average delay matches
+// the pure-exponential schedule; the cap stops it growing forever.
+func backoff(attempt int, base time.Duration) time.Duration {
+	if base <= 0 {
+		base = 30 * time.Second
+	}
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt > 10 {
+		attempt = 10 // 2^10 × 30s ≈ 8.5 hours — far past the cap anyway
+	}
+	delay := base * (1 << attempt)
+	jitter := time.Duration(rand.Int63n(int64(base)/2)) - base/4
+	delay += jitter
+	if delay > 5*time.Minute {
+		delay = 5 * time.Minute
+	}
+	if delay < base/2 {
+		delay = base / 2
+	}
+	return delay
 }
 
 func runQaiBrowserCapture(subArgs ...string) (string, error) {
@@ -491,6 +590,14 @@ FLAGS
   --soft-wait         A wait timeout doesn't abort; clip whatever's on the page.
                       Use when CJ's anti-bot throttling leaves the page stuck
                       in skeleton state — you get a clip you can inspect.
+  --max-retries N     Retry navigate on a CJ-throttle timeout up to N times.
+                      Default: 3. Set 0 to disable retries entirely.
+  --retry-base <dur>  Base backoff for the first retry. Default: 30s.
+                      Schedule is exponential: base, 2×base, 4×base, … with
+                      ±25% jitter, capped at 5 minutes per retry. Only the
+                      throttle signature ("timeout after … waiting for
+                      selector") triggers a retry; real errors (security
+                      gate, network, bad URL) fail immediately.
 
 ANTI-BOT NOTES
   CJ rate-limits programmatic navigation. After 5-10 fast 'qai browser open'

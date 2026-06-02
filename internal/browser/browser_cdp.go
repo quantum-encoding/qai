@@ -70,6 +70,59 @@ func cdpActivateTab(port int, tabID string) error {
 	return nil
 }
 
+// cdpNewTab opens a fresh tab via PUT /json/new. targetURL may be ""
+// for a blank tab. Returns the created tab's metadata so the caller
+// can pin it to a slot or attach for further work.
+//
+// The new tab is created in the background — the browser does not
+// switch focus to it, so calling this in a loop from an agent doesn't
+// interrupt whatever the human is doing in the foreground tab.
+func cdpNewTab(port int, targetURL string) (*cdpTab, error) {
+	u := fmt.Sprintf("http://localhost:%d/json/new", port)
+	if targetURL != "" {
+		u += "?" + targetURL
+	}
+	req, err := http.NewRequest(http.MethodPut, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("create tab: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("create tab HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	var tab cdpTab
+	if err := json.Unmarshal(data, &tab); err != nil {
+		return nil, fmt.Errorf("parse new-tab response: %w (body: %s)", err, string(data))
+	}
+	return &tab, nil
+}
+
+// cdpCloseTab closes a tab via PUT /json/close/<id>. Idempotent — a
+// non-200 from a stale ID is treated as already-closed.
+func cdpCloseTab(port int, tabID string) error {
+	u := fmt.Sprintf("http://localhost:%d/json/close/%s", port, tabID)
+	req, err := http.NewRequest(http.MethodPut, u, nil)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("close tab: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // ─── websocket client ─────────────────────────────────────────────────────
 
 // cdpClient holds an active WebSocket connection to a single browser tab.

@@ -61,7 +61,7 @@ func browserPort(args []string) int {
 // Boolean (no value):   --html --yes -y --help -h
 func stripFlags(args []string) []string {
 	valueFlags := map[string]bool{
-		"--port": true, "--tab": true,
+		"--port": true, "--tab": true, "--slot": true,
 		"--selector": true, "--wait": true, "--theme": true,
 		"-o": true, "--timeout": true,
 	}
@@ -76,9 +76,34 @@ func stripFlags(args []string) []string {
 	return out
 }
 
-// tabIDFromArgs extracts --tab value.
+// tabIDFromArgs extracts --tab value, resolving slot names against
+// the persisted slot map. A slot name (e.g. "TAB2", "main") resolves
+// to the pinned tab ID; a 32-char hex pass through unchanged for the
+// existing prefix-match path in connectToTab. A short hex prefix
+// passes through too — those are existing-script-compatible.
+//
+// Returns "" when no --tab was provided. Returns the original arg
+// (unresolved) when the slot name has no live tab pinned, so the
+// downstream tab-prefix matcher can produce a useful error.
 func tabIDFromArgs(args []string) string {
-	return flagValue(args, "--tab")
+	raw := flagValue(args, "--tab")
+	if raw == "" {
+		return ""
+	}
+	if !LooksLikeSlotName(raw) {
+		return raw
+	}
+	// Slot-name lookup. We don't prune here — that would force the
+	// HTTP /json call on every command. The downstream connectToTab
+	// already handles "tab not found" cleanly.
+	m, err := LoadSlots(nil)
+	if err != nil {
+		return raw
+	}
+	if id, ok := m[raw]; ok {
+		return id
+	}
+	return raw
 }
 
 // flagValue returns the string that follows the named flag, or "" if
@@ -91,6 +116,16 @@ func flagValue(args []string, name string) string {
 		}
 	}
 	return ""
+}
+
+// argsHasHelp returns true when --help / -h appears in args.
+func argsHasHelp(args []string) bool {
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			return true
+		}
+	}
+	return false
 }
 
 // ─── connect helper ───────────────────────────────────────────────────────
@@ -292,6 +327,10 @@ func CmdBrowser(args []string) {
 		browserList(rest)
 	case "open", "navigate", "go":
 		browserOpen(rest)
+	case "new":
+		browserNew(rest)
+	case "close":
+		browserClose(rest)
 	case "tab":
 		browserTab(rest)
 	case "extract", "text":
@@ -481,6 +520,20 @@ func browserList(args []string) {
 		return
 	}
 
+	// Slot lookup is keyed by tab ID so we can show "TAB1" alongside
+	// the hex prefix. Pruning is opt-in via the live-tab map so the
+	// list view also self-heals the slot file when the user closed a
+	// tab manually.
+	liveTabs := make(map[string]bool, len(tabs))
+	for _, t := range tabs {
+		liveTabs[t.ID] = true
+	}
+	slots, _ := LoadSlots(liveTabs)
+	slotByID := make(map[string]string, len(slots))
+	for name, id := range slots {
+		slotByID[id] = name
+	}
+
 	for _, t := range tabs {
 		if t.Type != "page" {
 			continue
@@ -489,10 +542,17 @@ func browserList(args []string) {
 		if len(title) > 60 {
 			title = title[:57] + "..."
 		}
-		fmt.Printf("%-12s %-60s %s\n", t.ID[:12], title, t.URL)
+		slotCol := slotByID[t.ID]
+		if slotCol == "" {
+			slotCol = "-"
+		}
+		fmt.Printf("%-12s %-8s %-60s %s\n", t.ID[:12], slotCol, title, t.URL)
 	}
 	if sensitive > 0 || denied > 0 {
 		fmt.Fprintf(os.Stderr, "(%d denied, %d sensitive entries redacted — re-run with --yes to reveal sensitive)\n", denied, sensitive)
+	}
+	if len(slots) > 0 {
+		fmt.Fprintf(os.Stderr, "slots: %s\n", FormatSlotList(slots))
 	}
 }
 
@@ -1076,6 +1136,128 @@ func browserClip(args []string) {
 	fmt.Println(note.ID)
 }
 
+// ─── new / close: multi-tab management ────────────────────────────────────
+
+// browserNew opens a fresh tab via PUT /json/new without disturbing
+// the foreground tab the user is on. Optional positional URL and
+// --slot <name> for pinning. Stdout = the new tab's 32-char ID so
+// callers can pipeline `qai browser new ... | xargs qai browser open`.
+//
+// The new tab is created in the background — the browser does NOT
+// switch focus, so an agent can spin up TAB1..TAB5 while the human
+// keeps working in whatever was foreground.
+func browserNew(args []string) {
+	if argsHasHelp(args) {
+		fmt.Fprintln(os.Stderr, helpNew)
+		return
+	}
+	port := browserPort(args)
+	slot := flagValue(args, "--slot")
+	clean := stripFlags(args)
+	var targetURL string
+	if len(clean) > 0 {
+		targetURL = clean[0]
+	}
+
+	// Security gate when a URL is given — same shape as `open`. A
+	// blank-tab create needs no gate.
+	if targetURL != "" {
+		if err := securityGate("new", &cdpTab{URL: targetURL}, targetURL); err != nil {
+			os.Exit(1)
+		}
+	}
+
+	tab, err := cdpNewTab(port, targetURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qai browser new: %v\n", err)
+		os.Exit(1)
+	}
+	if slot != "" {
+		if !LooksLikeSlotName(slot) {
+			fmt.Fprintf(os.Stderr,
+				"qai browser new: --slot %q looks like a tab ID (32-char hex); pick a non-hex name (e.g. TAB1, main)\n", slot)
+			os.Exit(1)
+		}
+		if err := SaveSlot(slot, tab.ID); err != nil {
+			fmt.Fprintf(os.Stderr, "qai browser new: pin slot %q: %v\n", slot, err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "📌 pinned slot %s → tab %s\n", slot, tab.ID[:8])
+	}
+	if targetURL != "" {
+		fmt.Fprintf(os.Stderr, "🆕 new tab → %s\n", targetURL)
+	} else {
+		fmt.Fprintln(os.Stderr, "🆕 new blank tab")
+	}
+	// Stdout is the tab ID alone for clean pipelining.
+	fmt.Println(tab.ID)
+}
+
+// browserClose closes a tab by slot name OR by hex ID (full or
+// prefix). When closed by slot name, the slot is also unpinned; when
+// closed by hex ID, any slot pinned to that tab is unpinned too.
+func browserClose(args []string) {
+	if argsHasHelp(args) || len(stripFlags(args)) == 0 {
+		fmt.Fprintln(os.Stderr, helpClose)
+		if len(stripFlags(args)) == 0 {
+			os.Exit(1)
+		}
+		return
+	}
+	port := browserPort(args)
+	target := stripFlags(args)[0]
+
+	// Resolve slot name → tab ID
+	tabID := target
+	wasSlot := false
+	if LooksLikeSlotName(target) {
+		m, err := LoadSlots(nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "qai browser close: load slots: %v\n", err)
+			os.Exit(1)
+		}
+		id, ok := m[target]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "qai browser close: slot %q not pinned\n", target)
+			fmt.Fprintln(os.Stderr, "  → fix: 'qai browser list --slots' to see pinned slots")
+			os.Exit(1)
+		}
+		tabID = id
+		wasSlot = true
+	} else {
+		// Prefix match against live tabs to get full ID.
+		tabs, err := cdpListTabs(port)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "qai browser close: %v\n", err)
+			os.Exit(1)
+		}
+		matched := ""
+		for _, t := range tabs {
+			if t.ID == target || strings.HasPrefix(t.ID, target) {
+				matched = t.ID
+				break
+			}
+		}
+		if matched == "" {
+			fmt.Fprintf(os.Stderr, "qai browser close: no tab matching %q\n", target)
+			os.Exit(1)
+		}
+		tabID = matched
+	}
+
+	if err := cdpCloseTab(port, tabID); err != nil {
+		fmt.Fprintf(os.Stderr, "qai browser close: %v\n", err)
+		os.Exit(1)
+	}
+	if wasSlot {
+		_ = UnpinSlot(target)
+		fmt.Fprintf(os.Stderr, "✅ closed tab in slot %s (was %s)\n", target, tabID[:8])
+	} else {
+		_ = UnpinTabID(tabID)
+		fmt.Fprintf(os.Stderr, "✅ closed tab %s\n", tabID[:8])
+	}
+}
+
 // ─── usage ────────────────────────────────────────────────────────────────
 
 func browserUsage() {
@@ -1089,6 +1271,9 @@ Commands:
   qai browser list                        List open tabs
   qai browser open <url>                  Navigate to URL
                                           Flags: --wait <css>, --theme light|dark, --timeout 30s
+  qai browser new [url] [--slot <name>]   Open a fresh tab in the background.
+                                          Optionally pin to a slot (TAB1, main, …).
+  qai browser close <slot-or-id>          Close a tab by slot name or hex ID.
   qai browser tab <id>                    Activate a specific tab
   qai browser extract [--html]            Get page text (or HTML)
   qai browser screenshot [-o file.png]    Capture screenshot as PNG
@@ -1115,7 +1300,56 @@ Commands:
 
 Global flags:
   --port <n>            CDP port (default: 9222, or QAI_BROWSER_PORT env)
-  --tab <id>            Target a specific tab by ID (prefix match)
+  --tab <id|slot>       Target a specific tab. Accepts a 32-char hex ID,
+                        a unique prefix of one, OR a pinned slot name
+                        (e.g. TAB1, main). See 'qai browser new --help'.
   --json                Machine-readable JSON output (where supported)
 `)
 }
+
+const helpNew = `qai browser new — open a fresh tab in the background
+
+USAGE
+  qai browser new [url] [--slot <name>] [--port <n>]
+
+Creates a new tab via the browser's debug-port /json/new endpoint. The
+browser does NOT switch focus, so an agent can spin up multiple work
+streams without disturbing whatever tab the human is currently using.
+
+STDOUT
+  The new tab's 32-char ID. Pipeline-friendly:
+    NEW=$(qai browser new https://x.com)
+    qai browser clip clips "X" --tab "$NEW"
+
+FLAGS
+  --slot <name>   Pin this tab to a named slot (TAB1, main, cj-research…).
+                  Pinned slots persist in ~/.qai/browser-slots.json and
+                  are honoured by every command that takes --tab.
+                  Slot names cannot collide with 32-char hex tab IDs.
+
+EXAMPLES
+  qai browser new                                  # blank tab, no pin
+  qai browser new https://example.com --slot TAB1  # pin to slot TAB1
+  qai browser open https://other.com --tab TAB1    # navigate slot TAB1
+
+WHY SLOTS
+  Hex IDs change every browser restart and are tedious to type. Slots
+  give the agent a stable address for "the tab I use for CJ research"
+  vs "the tab for Joplin admin" vs "the foreground one the human owns".
+  Stale slots (whose tab was closed manually) are pruned automatically
+  on the next slot-aware command.`
+
+const helpClose = `qai browser close — close a tab
+
+USAGE
+  qai browser close <slot-or-id> [--port <n>]
+
+Closes a tab by slot name (TAB1, main, …) OR by 32-char hex ID
+(prefix match works). When closed by slot name, the slot is also
+unpinned; when closed by hex ID, any slot pinned to that tab is
+unpinned automatically.
+
+EXAMPLES
+  qai browser close TAB1
+  qai browser close 71BD79                           # prefix match
+  qai browser close 71BD792058B2801E21011A7EDE2D62B6 # exact ID`

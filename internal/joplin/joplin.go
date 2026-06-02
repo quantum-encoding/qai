@@ -31,7 +31,11 @@ type Config struct {
 	// Token is the Web Clipper API token shown in
 	// Joplin → Tools → Options → Web Clipper.
 	Token string
-	// Timeout caps every request; default is 10 seconds.
+	// Timeout caps every request. Default is 60 seconds — most calls
+	// (list folders, search, get note) return in <100ms, but the
+	// clip-style POST (body_html → markdown conversion + resource
+	// download for every <img>) can take 30s+ on React pages with
+	// 60-image grids. Override with the JOPLIN_TIMEOUT env var.
 	Timeout time.Duration
 }
 
@@ -44,12 +48,26 @@ type Client struct {
 // New builds a Client. The default timeout is applied when cfg.Timeout is zero.
 func New(cfg Config) *Client {
 	if cfg.Timeout == 0 {
-		cfg.Timeout = 10 * time.Second
+		cfg.Timeout = defaultTimeout()
 	}
 	return &Client{
 		cfg: cfg,
 		hc:  &http.Client{Timeout: cfg.Timeout},
 	}
+}
+
+// defaultTimeout reads JOPLIN_TIMEOUT (Go duration syntax: "30s", "2m")
+// or falls back to 60s. The previous 10s default was too tight for
+// /notes POSTs with multi-MB body_html — clip + image-fetch can take
+// 30s+. The new default is conservative; override down if you have a
+// reason to fail fast.
+func defaultTimeout() time.Duration {
+	if v := os.Getenv("JOPLIN_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 60 * time.Second
 }
 
 // LoadDefaultToken returns the Web Clipper API token from $JOPLIN_TOKEN,

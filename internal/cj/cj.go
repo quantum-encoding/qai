@@ -27,6 +27,8 @@ func CmdCJ(args []string) {
 	switch sub {
 	case "extract", "parse":
 		cmdExtract(rest)
+	case "batch":
+		cmdBatch(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "qai cj: unknown subcommand %q\n", sub)
 		fmt.Fprintln(os.Stderr, "Run `qai cj --help` for the list.")
@@ -260,6 +262,9 @@ USAGE
   qai cj extract --joplin "<title>"    Find latest matching note by title
   qai cj extract ... --summary         Human-skim view
   qai cj extract ... --strict          Exit 3 if nothing extracted
+
+  qai cj batch <urls.csv> [flags]      Navigate→clip→extract for many URLs at once
+                                       See 'qai cj batch --help' for the full surface.
 
 WORKFLOW (fully scripted)
   qai browser open "<cj-intelligence-url>"

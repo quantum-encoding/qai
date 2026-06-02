@@ -188,6 +188,43 @@ func TestSplitPipeRowRespectsLinks(t *testing.T) {
 	}
 }
 
+// TestParseSearchResults — the catalog search page shape. Different
+// markdown wrapping (HTML <br>s, relative URL, "Lists: N" instead of
+// "Listed N") but same essential data. Same CJProduct output shape.
+func TestParseSearchResults(t *testing.T) {
+	clip := "Some preamble text.\n\n" +
+		"[![](:/4302467153d34554a64ae27843603f43)<br>List<br>Added Products<br>" +
+		"Massage Ball Stab Ball Fascia Ball Hockey<br>Lists: 153<br>\\$0.52-0.61<br>QTY]" +
+		"(/product/massage-ball-stab-ball-fascia-ball-hockey-p-1356786332353040384.html)\n\n" +
+		"[![](:/c5ba222aef7c4fa194a57e5ee5242df2)<br>List<br>Added Products<br>" +
+		"Clutch Ball Pulley Ball Drive Ball Roller<br>Lists: 9<br>\\$7.79<br>QTY]" +
+		"(/product/clutch-ball-pulley-ball-drive-ball-roller-p-1440924245784924160.html)\n"
+	r := Parse(clip)
+	if len(r.CJProducts) != 2 {
+		t.Fatalf("CJProducts: got %d want 2", len(r.CJProducts))
+	}
+	p0 := r.CJProducts[0]
+	if p0.PID != "1356786332353040384" {
+		t.Errorf("p0.PID = %q", p0.PID)
+	}
+	if p0.Title != "Massage Ball Stab Ball Fascia Ball Hockey" {
+		t.Errorf("p0.Title = %q", p0.Title)
+	}
+	if p0.ListedCount != 153 {
+		t.Errorf("p0.ListedCount = %d, want 153", p0.ListedCount)
+	}
+	if p0.PriceMin != 0.52 || p0.PriceMax != 0.61 {
+		t.Errorf("p0 price = (%v, %v), want (0.52, 0.61)", p0.PriceMin, p0.PriceMax)
+	}
+	if p0.URL != "https://www.cjdropshipping.com/product/massage-ball-stab-ball-fascia-ball-hockey-p-1356786332353040384.html" {
+		t.Errorf("p0.URL = %q — relative URL not absolutized", p0.URL)
+	}
+	p1 := r.CJProducts[1]
+	if p1.PriceMin != 7.79 || p1.PriceMax != 7.79 {
+		t.Errorf("p1 price = (%v, %v), want (7.79, 7.79) — single-value form on search", p1.PriceMin, p1.PriceMax)
+	}
+}
+
 // TestEmptyInputDoesNotPanic — buildContext-style guard. An agent
 // running --extract on a non-CJ markdown file should get an empty
 // payload, not a nil-deref.

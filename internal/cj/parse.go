@@ -101,13 +101,46 @@ func Parse(md string) *Result {
 		Competitors: []Competitor{},
 	}
 	r.Category, r.CategoryID = parseCategory(md)
-	r.CJProducts = parseCJRecommended(md)
+
+	// Two distinct CJ page shapes produce the same boardable output:
+	//
+	//   - Intelligence dashboard "CJ Recommended Top N" — the original
+	//     parse target; explicit "Listed N\$PRICE" trailer.
+	//   - Catalog search results (/search/<query>.html) — different
+	//     card markup, same essential data (pid, title, list count,
+	//     price range). Much wider discovery surface since the human
+	//     can search by keyword.
+	//
+	// Both produce CJProduct rows; dedup by PID so a hybrid clip (rare
+	// but possible if a recommended product also appears in search
+	// results) doesn't double-count.
+	r.CJProducts = dedupByPID(append(
+		parseCJRecommended(md),
+		parseSearchResults(md)...,
+	))
 	r.Competitors = parseCompetitorTable(md)
 	r.Counts = Counts{
 		CJProducts:  len(r.CJProducts),
 		Competitors: len(r.Competitors),
 	}
 	return r
+}
+
+// dedupByPID keeps the first occurrence per pid. Intelligence-page
+// matches run first so their richer "listed_count" wins if the same
+// pid also shows up in a search-results block (search rows have a
+// "Lists: N" count that means roughly the same thing).
+func dedupByPID(in []CJProduct) []CJProduct {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]CJProduct, 0, len(in))
+	for _, p := range in {
+		if _, dup := seen[p.PID]; dup {
+			continue
+		}
+		seen[p.PID] = struct{}{}
+		out = append(out, p)
+	}
+	return out
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -134,6 +167,46 @@ func parseCJRecommended(md string) []CJProduct {
 		pid := m[cjRecommendedRow.SubexpIndex("pid")]
 		listed, _ := strconv.Atoi(m[cjRecommendedRow.SubexpIndex("listed")])
 		priceRaw := m[cjRecommendedRow.SubexpIndex("price")]
+		pMin, pMax := parsePriceRange(priceRaw)
+		out = append(out, CJProduct{
+			PID:         pid,
+			URL:         url,
+			Title:       title,
+			ListedCount: listed,
+			PriceMin:    pMin,
+			PriceMax:    pMax,
+			PriceRaw:    "$" + priceRaw,
+		})
+	}
+	return out
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Catalog search results (/search/<query>.html)
+// ────────────────────────────────────────────────────────────────────────
+
+// CJ catalog search renders each card as one long markdown link with
+// HTML <br> separators inside the anchor:
+//
+//   [![](:/HASH)<br>List<br>Added Products<br>TITLE<br>Lists: N<br>\$PRICE<br>QTY](/product/SLUG-p-PID.html)
+//
+// The URL is RELATIVE here (no scheme/host) — Joplin's clipper drops
+// the host prefix because the page is same-origin. We prepend the
+// canonical https://www.cjdropshipping.com so downstream consumers
+// don't have to.
+var searchResultRow = regexp.MustCompile(
+	`Added Products<br>(?P<title>[^<]+?)<br>Lists:\s*(?P<lists>\d+)<br>\\?\$(?P<price>[\d.\-]+)[^]]*?\]\((?P<url>/product/[^)]*-p-(?P<pid>\d+)\.html)\)`,
+)
+
+func parseSearchResults(md string) []CJProduct {
+	out := []CJProduct{}
+	matches := searchResultRow.FindAllStringSubmatch(md, -1)
+	for _, m := range matches {
+		title := strings.TrimSpace(m[searchResultRow.SubexpIndex("title")])
+		listed, _ := strconv.Atoi(m[searchResultRow.SubexpIndex("lists")])
+		priceRaw := m[searchResultRow.SubexpIndex("price")]
+		url := "https://www.cjdropshipping.com" + m[searchResultRow.SubexpIndex("url")]
+		pid := m[searchResultRow.SubexpIndex("pid")]
 		pMin, pMax := parsePriceRange(priceRaw)
 		out = append(out, CJProduct{
 			PID:         pid,

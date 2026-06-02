@@ -52,6 +52,7 @@ type LocaleStats struct {
 type Report struct {
 	Repo        string         `json:"repo"`
 	I18nDir     string         `json:"i18n_dir"`
+	Mode        string         `json:"mode"`             // "per-locale" | "nested"
 	Baseline    string         `json:"baseline"`         // e.g. "en"
 	Locales     []string       `json:"locales"`          // sorted, includes baseline
 	CommitSHA   string         `json:"commit_sha"`       // best-effort; empty if not a git repo

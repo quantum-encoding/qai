@@ -24,6 +24,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -61,6 +62,15 @@ Translation coverage scanner. Reads <repo>'s i18n dictionary files and
 reports which keys each locale has translated, has missing, or has
 identical-to-English (likely untranslated).
 
+Layouts auto-detected (no --i18n-dir needed for the common cases):
+  • per-locale   one file per locale (en.ts, fr.ts, …). Baseline may also
+                 live as 'const en = {…}' inside a shared ui.ts.
+  • nested       a single Astro file with 'Record<Locale, T>' dictionaries
+                 (export const ui = { en:{…}, es:{…} }).
+The i18n dir is auto-detected among src/lib/i18n, src/i18n/locales, src/i18n,
+src/locales; the 'type Locale' union (src/lib/i18n.ts) is read so locales
+declared-but-untranslated still show as 0%.
+
 Subcommands:
   scan       Full grid report.
   missing    Flat (locale, key) work-queue (missing + untranslated).
@@ -89,15 +99,17 @@ apply flags:
   --dry-run             print the planned change without writing
 
 Flags:
-  --i18n-dir <rel>     directory under <repo>  (default src/lib/i18n)
+  --i18n-dir <rel>     directory under <repo>  (default: auto-detect)
   --baseline <locale>  baseline locale         (default en)
   --format table|json  output format           (default table)
   --locale <code>      filter to one locale    (missing / stats only)
+  (flags work before or after <repo>)
 
 Examples:
   qai i18n scan    ~/work/tauri_apps/kitchen-share
-  qai i18n missing ~/work/tauri_apps/kitchen-share --locale ko
-  qai i18n stats   ~/work/tauri_apps/kitchen-share --format json
+  qai i18n stats   ~/work/websites/dropship-accelerator        # Astro, per-locale
+  qai i18n stats   ~/work/websites/reformas-costa-sol-astro    # Astro, nested ui.ts
+  qai i18n missing ~/work/websites/dropship-accelerator --locale ja
 
 Setup (one-time, scanner binary):
   cargo install --path ~/work/poly-repo/quantum-ai-polyrepo/codebase_deity --bin i18n_extract
@@ -106,10 +118,41 @@ Setup (one-time, scanner binary):
 
 func addCommonFlags(fs *flag.FlagSet) (*ScanOptions, *string) {
 	opts := &ScanOptions{}
-	fs.StringVar(&opts.I18nDir, "i18n-dir", "src/lib/i18n", "i18n dir relative to repo")
+	// Empty default → Scan auto-detects among src/lib/i18n, src/i18n,
+	// src/i18n/locales, src/locales. An explicit --i18n-dir still wins.
+	fs.StringVar(&opts.I18nDir, "i18n-dir", "", "i18n dir relative to repo (default: auto-detect)")
 	fs.StringVar(&opts.Baseline, "baseline", "en", "baseline locale")
 	format := fs.String("format", "table", "output format (table | json)")
 	return opts, format
+}
+
+// scanValueFlags are the flags shared by scan/missing/stats that take a
+// value. Used by flagsFirst to reorder so flags work after <repo>.
+var scanValueFlags = map[string]bool{
+	"--i18n-dir": true, "--baseline": true, "--format": true, "--locale": true,
+	"-i18n-dir": true, "-baseline": true, "-format": true, "-locale": true,
+}
+
+// flagsFirst moves every flag (and the value of a value-bearing flag) ahead
+// of the positional args. Go's flag package stops parsing at the first
+// non-flag token, so `qai i18n stats <repo> --i18n-dir x` would otherwise
+// silently ignore the flag. This makes flag position irrelevant.
+func flagsFirst(args []string, valueFlags map[string]bool) []string {
+	var flags, pos []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") && a != "-" {
+			flags = append(flags, a)
+			// `--flag=value` carries its own value; otherwise consume next.
+			if valueFlags[a] && !strings.Contains(a, "=") && i+1 < len(args) {
+				i++
+				flags = append(flags, args[i])
+			}
+			continue
+		}
+		pos = append(pos, a)
+	}
+	return append(flags, pos...)
 }
 
 // ---------------------------------------------------------------------
@@ -119,7 +162,7 @@ func addCommonFlags(fs *flag.FlagSet) (*ScanOptions, *string) {
 func runScan(args []string) {
 	fs := flag.NewFlagSet("i18n scan", flag.ExitOnError)
 	opts, format := addCommonFlags(fs)
-	_ = fs.Parse(args)
+	_ = fs.Parse(flagsFirst(args, scanValueFlags))
 	if fs.NArg() < 1 {
 		fail("scan: missing <repo>")
 	}
@@ -146,7 +189,7 @@ func runMissing(args []string) {
 	fs := flag.NewFlagSet("i18n missing", flag.ExitOnError)
 	opts, format := addCommonFlags(fs)
 	locale := fs.String("locale", "", "filter to one locale")
-	_ = fs.Parse(args)
+	_ = fs.Parse(flagsFirst(args, scanValueFlags))
 	if fs.NArg() < 1 {
 		fail("missing: missing <repo>")
 	}
@@ -309,7 +352,7 @@ func splitCsv(s string) []string {
 func runStats(args []string) {
 	fs := flag.NewFlagSet("i18n stats", flag.ExitOnError)
 	opts, format := addCommonFlags(fs)
-	_ = fs.Parse(args)
+	_ = fs.Parse(flagsFirst(args, scanValueFlags))
 	if fs.NArg() < 1 {
 		fail("stats: missing <repo>")
 	}
@@ -332,11 +375,7 @@ func runStats(args []string) {
 		return
 	}
 
-	if r.CommitSHA != "" {
-		fmt.Fprintf(os.Stderr, "%s @ %s · scanned %s\n\n", r.Repo, r.CommitSHA, r.ScannedAt.Format("2006-01-02 15:04"))
-	} else {
-		fmt.Fprintf(os.Stderr, "%s · scanned %s\n\n", r.Repo, r.ScannedAt.Format("2006-01-02 15:04"))
-	}
+	fmt.Fprintf(os.Stderr, "%s\n\n", scanHeader(r))
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "LOCALE\tCOVERAGE\tPRESENT\tMISSING\tUNTRANSLATED\tEXEMPT")
@@ -354,13 +393,7 @@ func runStats(args []string) {
 // ---------------------------------------------------------------------
 
 func emitGrid(r *Report) {
-	if r.CommitSHA != "" {
-		fmt.Fprintf(os.Stderr, "%s @ %s · scanned %s · baseline=%s\n",
-			r.Repo, r.CommitSHA, r.ScannedAt.Format("2006-01-02 15:04"), r.Baseline)
-	} else {
-		fmt.Fprintf(os.Stderr, "%s · scanned %s · baseline=%s\n",
-			r.Repo, r.ScannedAt.Format("2006-01-02 15:04"), r.Baseline)
-	}
+	fmt.Fprintf(os.Stderr, "%s · baseline=%s\n", scanHeader(r), r.Baseline)
 	fmt.Fprintln(os.Stderr)
 
 	// Header row
@@ -426,6 +459,26 @@ func nonBaselineLocales(r *Report) []string {
 func emitJSON(v any) {
 	b, _ := json.MarshalIndent(v, "", "  ")
 	fmt.Println(string(b))
+}
+
+// scanHeader is the one-line provenance shown above every report: repo,
+// commit, detected convention, and which dir was scanned (relative to the
+// repo so auto-detect's choice is visible at a glance).
+func scanHeader(r *Report) string {
+	dir := r.I18nDir
+	if rel, err := filepath.Rel(r.Repo, r.I18nDir); err == nil {
+		dir = rel
+	}
+	parts := []string{r.Repo}
+	if r.CommitSHA != "" {
+		parts = append(parts, "@ "+r.CommitSHA)
+	}
+	parts = append(parts,
+		"· scanned "+r.ScannedAt.Format("2006-01-02 15:04"),
+		"· mode="+r.Mode,
+		"· dir="+dir,
+	)
+	return strings.Join(parts, " ")
 }
 
 func trunc(s string, n int) string {

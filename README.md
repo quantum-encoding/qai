@@ -182,7 +182,52 @@ searchable via `qai search --joplin "<term>"`, editable in the Joplin UI.
 |-------------------|----------------------------|-------|
 | `JOPLIN_TOKEN`    | —                          | Required. Web Clipper API token (Joplin → Tools → Options → Web Clipper) |
 | `JOPLIN_BASE_URL` | `http://127.0.0.1:41184`   | Override Joplin endpoint (e.g. running on a different port) |
+| `JOPLIN_TIMEOUT`  | `60s`                      | HTTP client timeout (clip POSTs of multi-MB body_html need this) |
 | `QAI_PROJECT`     | —                          | Override the active project name for a single session |
+
+#### Cross-repo edit-target tagging
+
+When the agent is launched from repo A but does all its work in repo
+B (typical Claude Code "port the hot tub site to the new dropship
+project" sessions), the cwd-based tag resolver picks A and pollutes
+your graph. The edit-target hook fixes this: a Claude Code
+`PostToolUse` hook on `Edit|Write|MultiEdit` writes the last-edited
+file's path to `~/.qai/target-edit-path`; `projectid.Resolve` reads
+it first and anchors resolution on the target dir instead. Failure-
+redirecting (never breaks single-repo sessions).
+
+Setup walkthrough + hook script: [`docs/edit-target-hook.md`](docs/edit-target-hook.md).
+
+### Joplin Bridge & Graph
+
+Syncs your Joplin library into SurrealDB as a typed graph (notes ×
+notebooks × tags × wiki-links) and exposes an agent-memory read verb
+that hydrates a fresh session with relevant context.
+
+```bash
+# write/maintain
+qai joplin bridge sync                  # one-shot full pull, resumable
+qai joplin bridge tail                  # event-stream daemon
+qai joplin bridge status [--watch|--json|--check]
+qai joplin bridge schema                # print the embedded schema
+
+# read
+qai joplin graph context [query]        # agent-memory bundle as JSON
+qai joplin graph context --project X    # notes tagged project:X
+qai joplin graph context --tag A --with B   # tag intersection
+```
+
+`bridge status` exposes a structured `HealthCheck` (seven-state
+classifier, OK/Reason contract) consumed both by the human CLI and by
+`graph context`. The freshness gate is policy-by-design — serve-
+stale-with-label by default, `--strict` opt-in for cron consumers
+that prefer empty-and-fail. Full-text recall via BM25 over note title
++ excerpt; graph neighbourhood (`contains`, `nested_in`, `has_tag`,
+`links_to`) attaches around the search hits.
+
+**Full coverage:** [`docs/joplin-bridge.md`](docs/joplin-bridge.md) —
+sync resumability, tail heartbeats, health classification table,
+gate decision matrix, payload schema, SurrealDB schema notes.
 
 ### Media Generation
 
@@ -348,78 +393,68 @@ For the day-to-day playbook (mental model, common bugs hit during iteration, sta
 
 ### Browser Automation (CDP)
 
-Connects to your existing Chrome/Brave via the DevTools Protocol debug port. No headless browser, no Playwright, no Node.js — uses your real browser session with all cookies, auth, and fingerprints intact.
+Drives your existing Chrome/Brave via the DevTools Protocol debug port.
+No headless browser, no Playwright, no Node.js — every command attaches
+to the browser you already have open, so your cookies, auth, and
+extensions are all live.
 
 ```bash
-qai browser launch                    # start browser with debug port (auto-detects Brave/Chrome)
-qai browser list                      # list open tabs
-qai browser open <url>                # navigate to URL
-qai browser extract [--html]          # get page text or HTML
-qai browser screenshot [-o file.png]  # capture screenshot
-qai browser click <selector>          # click element by CSS selector
-qai browser click <x> <y>            # click at coordinates
-qai browser type "text"               # type text character by character
-qai browser eval "js expression"      # evaluate JavaScript
-qai browser clip [notebook] [title]   # extract page + save to Joplin
-qai browser wait <selector> [timeout] # wait for element to appear
-qai browser source                    # get full page HTML
-qai browser pdf [-o file.pdf]         # print page to PDF
-qai browser tab <id>                  # activate a specific tab
-qai browser scrape <urls.csv>         # batch extract text from each URL
-qai browser scrape <urls.csv> --screenshot  # batch screenshot each URL
-qai browser scrape <urls.csv> --html  # batch extract HTML from each URL
+qai browser launch                      # auto-detect Brave/Chrome, start with debug port
+qai browser list                        # tabs + slot pinning + summary footer
+
+# navigate + interact
+qai browser open <url> [--wait <css>] [--theme light|dark] [--timeout 30s]
+qai browser screenshot [--selector <css>] [-o file.png]
+qai browser emulate <device> <url> [--selector] [--wait] [--theme]
+qai browser extract|source|pdf|click|type|eval|wait|clip|tab|scrape …
+
+# multi-tab management (NEW)
+qai browser new [url] [--slot <name>]   # spawn in background, optionally pin
+qai browser close <slot-or-id>          # close by slot name or hex (prefix ok)
+qai browser open … --tab TAB1           # address pinned tab by slot name
 ```
 
-CSV format: first column is the URL, optional second column is a label. Header row auto-detected.
+`qai browser clip` writes `body_html` to Joplin Desktop's `/notes`
+endpoint — the same endpoint the Joplin Web Clipper extension uses —
+so the resulting note is bit-compatible with what the extension
+produces. Stdout is the new note's ID for clean pipelining.
 
-Options: `--delay <ms>` (default 1000), `-o <dir>` (output directory), `--json` (write manifest).
+Layered security perimeter (pattern block, hard-deny schemes, ~30
+builtin sensitive-domain list, TTY confirmation, list redaction, batch
+pre-flight, audit log). User-configurable via
+`~/.qai/browser-policy.yaml`.
 
-Global flags: `--port <n>` (default 9222 or `QAI_BROWSER_PORT`), `--tab <id>`, `--json`.
+**Full coverage:** [`docs/browser.md`](docs/browser.md) — every
+subcommand, the tab/slot system end-to-end, the security model in
+detail, and the determinism notes (the `--theme` renderer-barrier
+fix, the React-grid wait-selector trap that bit the CJ workflow, etc.)
 
-#### Security Perimeter
+### CJ Dropshipping research (`qai cj`)
 
-Layered defence against prompt-injection attacks that try to drive an authenticated browser session against the user's interests:
+The CJ intelligence dashboard + catalog search are React SPAs behind
+a bot wall — neither headless scraping nor the CJ Open Platform API
+surface the demand data the dashboard shows. `qai cj` codifies the
+"human web-clips → agent extracts → boards downstream" workflow so
+no future session has to re-derive the regex.
 
-| Layer | Protection | Example |
-|-------|-----------|---------|
-| **Pattern block** | Hard-deny dangerous JS before it reaches the browser. Eval-only. No override. | `document.cookie`, `localStorage`, `fetch(`, `eval(`, `XMLHttpRequest`, `sendBeacon`, `chrome.runtime`, `ServiceWorker` |
-| **Hard deny** | Refuse the action outright — no TTY prompt, no `--yes` override. | Builtin: `chrome://`, `chrome-extension://`, `edge://`, `about:`, `devtools://`, `file://`, `view-source:`. Plus user `denied_domains` list. |
-| **Domain sensitivity** | Flag sensitive domains for confirmation. | ~30 builtins: AWS/GCP/Azure consoles, `*.github.com`, banks, `*.stripe.com`, `*.1password.com`, `*.okta.com`, `mail.google.com` |
-| **TTY confirmation** | Require human `[y/N]` approval on sensitive domains; non-interactive runs are denied unless `--yes` is passed. | Piped/automated input without `--yes` is denied by default |
-| **List redaction** | `qai browser list` hides URL+title of denied/sensitive tabs unless `--yes` is passed. | Stops an agent enumerating "what banking site is the user on" |
-| **Batch pre-flight** | `qai browser scrape <csv>` walks every URL through deny/sensitive checks **before** the CDP connection opens. Any denied URL → whole batch refused. Sensitive URLs → single batch confirmation, not N prompts mid-run. | A poisoned CSV with `https://vault.internal.mycompany.com/...` at row 50 fails at row 0 |
-| **Audit log** | JSONL trail of every command at `~/.qai/browser-audit.log`. | Logged regardless of allow/deny, with reason code |
-
-Gated actions: `open`, `extract`, `screenshot`, `click`, `type`, `eval`, `wait`, `source`, `pdf`, `clip`, `tab`, `scrape`. `list` always runs (with redaction). `launch` is local-only and not gated.
-
-The `--yes` flag is parsed as a real flag (not a substring of `os.Args`), so a quoted prompt that happens to contain the literal characters `--yes` cannot bypass confirmation.
-
-User-configurable via `~/.qai/browser-policy.yaml` (a fully commented template ships at `internal/browser/browser-policy.example.yaml`):
-
-```yaml
-# Hard deny — no TTY prompt, no --yes override.
-denied_domains:
-  - "vault.internal.mycompany.com"
-  - "admin.mycompany.com"
-
-# Sensitive — TTY confirm or --yes.
-sensitive_domains:
-  - "*.internal.mycompany.com"
-  - "grafana.mycompany.com"
-
-# Bypass sensitivity (does NOT bypass denied_domains).
-trusted_domains:
-  - "localhost"
-
-# Extra eval deny patterns (regex, case-insensitive).
-blocked_patterns:
-  - "internalAPI\\.secret"
-
-# When true, everything not trusted is sensitive.
-strict_mode: false
+```bash
+qai cj extract <clip.md>             # parse a clipped CJ page → JSON
+qai cj extract -                     # same, from stdin
+qai cj extract --joplin <id|title>   # fetch + parse a Joplin note
+qai cj batch <urls.csv>              # navigate → wait → clip → extract × N
 ```
 
-Stealth injection removes `navigator.webdriver` and spoofs browser fingerprints (plugins, WebGL, permissions API) to avoid bot detection on legitimate automation tasks.
+Handles two CJ page shapes (intelligence dashboard + catalog search)
+through the same `CJProduct[]` output, with PID-dedup. `batch` mode
+drives the full chain per row, with throttle-aware retry
+(exponential backoff + jitter, default 3 attempts) and a `--soft-
+wait` escape hatch for when CJ's anti-bot leaves the page in skeleton
+state.
+
+**Full coverage:** [`docs/cj.md`](docs/cj.md) — the three edge cases
+the parser survives (literal `|` in titles, NBSP days cell, trailing
+"Details" anchor), useful jq one-liners for boardable sorting, the
+honest anti-bot reality + workarounds.
 
 ### RAG Ingestion & Vector Search
 

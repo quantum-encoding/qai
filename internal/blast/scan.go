@@ -12,6 +12,7 @@ package blast
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,6 +81,19 @@ type EmitsError struct {
 	StatusCode int
 }
 
+// CodeFile is a per-file row populated by ExtractCodeFiles. Owned by a
+// repo; deterministic from (repo, path). The Role field is the closed
+// enum from 23-qai-extend-blast.surql — see role.go for the classifier.
+// language is per-file (from extension), not the repo's dominant language.
+type CodeFile struct {
+	ID        string // slugified: cf_<repo_id>_<slug(path)>
+	RepoID    string
+	Path      string // relative to repo root (forward slashes)
+	Language  string // per-file language inferred from extension
+	Role      string // role enum value, or "unknown" if no rule fired
+	LineCount int
+}
+
 type ScanReport struct {
 	Repos        []Repo
 	Endpoints    []Endpoint
@@ -89,6 +103,7 @@ type ScanReport struct {
 	CallsAPI     []CallsAPI
 	HandlesError []HandlesError
 	EmitsError   []EmitsError
+	Files        []CodeFile
 }
 
 // ---------------------------------------------------------------------
@@ -810,6 +825,74 @@ func matchRoute(callsite string, prefixes []string, byRoute map[string]string) s
 }
 
 // ---------------------------------------------------------------------
+// code_file (per-file role classification)
+// ---------------------------------------------------------------------
+
+// ExtractCodeFiles walks every repo and emits one CodeFile per source
+// file (filtered by role.go's roleExts allow-list). Role assignment is
+// driven by ClassifyFile in role.go; files that match no rule keep
+// role="unknown" — the deliberate "missing role > wrong role" call.
+//
+// File-size cap: 2 MiB. Larger files are classified by path/filename
+// only (content rules skipped) so the scan stays fast even when repos
+// contain large generated artifacts.
+//
+// Walks each repo separately. Skips skipDirs (node_modules, target,
+// .git, etc — re-used from ExtractCallsAndHandles).
+func ExtractCodeFiles(repos []Repo) ([]CodeFile, error) {
+	const maxContentBytes = 2 * 1024 * 1024
+	var out []CodeFile
+	for _, r := range repos {
+		err := filepath.WalkDir(r.Path, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if skipDirs[d.Name()] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			ext := filepath.Ext(d.Name())
+			if !roleExts[ext] {
+				return nil
+			}
+			rel, _ := filepath.Rel(r.Path, path)
+			rel = filepath.ToSlash(rel) // platform-agnostic record IDs
+
+			var content []byte
+			if st, statErr := os.Stat(path); statErr == nil && st.Size() <= maxContentBytes {
+				if body, readErr := os.ReadFile(path); readErr == nil {
+					content = body
+				}
+			}
+			role, _, _ := ClassifyFile(rel, content)
+
+			lines := 0
+			if content != nil {
+				lines = bytes.Count(content, []byte{'\n'}) + 1
+			}
+
+			id := "cf_" + slug(r.ID+"_"+rel)
+			out = append(out, CodeFile{
+				ID:        id,
+				RepoID:    r.ID,
+				Path:      rel,
+				Language:  langFromExt(ext),
+				Role:      role,
+				LineCount: lines,
+			})
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("walk %s: %w", r.Path, err)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// ---------------------------------------------------------------------
 // Top-level entry point
 // ---------------------------------------------------------------------
 
@@ -842,6 +925,9 @@ func Scan(root string) (*ScanReport, error) {
 		return nil, err
 	}
 	if rep.CallsAPI, rep.HandlesError, err = ExtractCallsAndHandles(repos, rep.Endpoints, rep.ErrorCodes, backend); err != nil {
+		return nil, err
+	}
+	if rep.Files, err = ExtractCodeFiles(repos); err != nil {
 		return nil, err
 	}
 	return rep, nil

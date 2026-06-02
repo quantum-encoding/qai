@@ -63,7 +63,7 @@ func CmdEditBatch(args []string) {
 			}
 		case "--model":
 			if i+1 < len(args) {
-				model = args[i+1]
+				model = resolveImageModel(args[i+1])
 				i++
 			}
 		case "--gcs-bucket":

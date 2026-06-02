@@ -52,7 +52,18 @@ func Statements(rep *ScanReport, opts IngestOpts) []string {
 		// schemafull IN/OUT constraints don't trip on dangling references
 		// while the wipe is in flight.
 		for _, t := range []string{
+			// Edges first so schemafull IN/OUT constraints don't trip
+			// on dangling references while the wipe is in flight.
 			"depends_on", "calls_api", "uses_struct", "handles_error", "emits_error",
+			// NOTE: code_file is deliberately NOT in the wipe list.
+			// Once edge_cases exist with `manifests_in_file` edges
+			// pointing at code_file rows, wiping would orphan them on
+			// every re-ingest. The CREATE below is UPSERT-shaped on a
+			// deterministic ID (cf_<repo>_<slug(path)>) so unchanged
+			// files refresh in place and edges survive a re-scan.
+			// Stale rows for renamed/deleted files persist (tiny cost);
+			// reconcile them with a separate `qai patterns reconcile`
+			// pass once that's built.
 			"repo", "api_endpoint", "sdk_struct", "error_code",
 		} {
 			s = append(s, "DELETE "+t)
@@ -84,6 +95,19 @@ func Statements(rep *ScanReport, opts IngestOpts) []string {
 		s = append(s, fmt.Sprintf(
 			"CREATE sdk_struct:%s CONTENT { name: %s, language: %s, owner_repo: repo:%s, source_file: %s }",
 			st.ID, quote(st.Name), quote(st.Language), st.OwnerRepo, optStr(st.SourceFile),
+		))
+	}
+
+	// code_file rows come from ExtractCodeFiles (role.go drives Role).
+	// UPSERT (not CREATE) on the deterministic ID so unchanged files
+	// refresh in place — this is the durability guarantee for
+	// `manifests_in_file` edges that hang off code_file once edge_cases
+	// land. Wiping code_file on Reset is intentionally disabled above
+	// for the same reason.
+	for _, f := range rep.Files {
+		s = append(s, fmt.Sprintf(
+			"UPSERT code_file:%s CONTENT { repo: repo:%s, path: %s, language: %s, role: %s, line_count: %s }",
+			f.ID, f.RepoID, quote(f.Path), quote(f.Language), quote(f.Role), optInt(f.LineCount),
 		))
 	}
 

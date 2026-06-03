@@ -145,8 +145,9 @@ func runFlat(args []string) {
 func runDeep(args []string) {
 	var (
 		csvPath string
-		limit   int    = 300
-		delay   int    = 750
+		limit   int = 300
+		delay   int = 750
+		cdpPort int // 0 means headless Chromium (default)
 	)
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -159,6 +160,19 @@ func runDeep(args []string) {
 			if i+1 < len(args) {
 				delay, _ = strconv.Atoi(args[i+1])
 				i++
+			}
+		case "--cdp":
+			// --cdp <port> tells the scraper to attach to an
+			// already-running Brave/Chrome instead of launching
+			// headless Chromium. Use when the target site
+			// challenges headless requests. Bare --cdp (no
+			// arg) defaults to 9222 to match qai browser launch.
+			cdpPort = 9222
+			if i+1 < len(args) {
+				if v, err := strconv.Atoi(args[i+1]); err == nil {
+					cdpPort = v
+					i++
+				}
 			}
 		case "--help", "-h", "help":
 			fmt.Print(helpDocs())
@@ -211,6 +225,9 @@ func runDeep(args []string) {
 		}
 		if row.PathPrefix != "" {
 			cmdArgs = append(cmdArgs, "--path-prefix", row.PathPrefix)
+		}
+		if cdpPort > 0 {
+			cmdArgs = append(cmdArgs, "--cdp", strconv.Itoa(cdpPort))
 		}
 
 		if err := runScraper(cmdArgs); err != nil {

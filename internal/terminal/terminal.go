@@ -115,8 +115,12 @@ func findPane(name string) (string, error) {
 		parts := strings.SplitN(line, "\t", 4)
 		if len(parts) >= 2 {
 			p := pane{id: parts[0], title: parts[1]}
-			if len(parts) >= 3 { p.cmd = parts[2] }
-			if len(parts) >= 4 { p.path = parts[3] }
+			if len(parts) >= 3 {
+				p.cmd = parts[2]
+			}
+			if len(parts) >= 4 {
+				p.path = parts[3]
+			}
 			panes = append(panes, p)
 		}
 	}
@@ -160,6 +164,8 @@ func capturePane(paneID string, lines int) string {
 
 func termList() {
 	ensureSession()
+	PruneDead()        // drop registry records for panes that have gone away
+	BackfillSessions() // fill in local session ids for panes whose transcripts now exist
 	session := tmuxSession()
 	out, err := tmuxRun("list-panes", "-s", "-t", session,
 		"-F", "#{pane_id}\t#{pane_title}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_width}x#{pane_height}")
@@ -168,17 +174,28 @@ func termList() {
 		return
 	}
 
-	fmt.Printf("%-8s %-20s %-8s %-40s %-15s %s\n", "ID", "NAME", "PID", "CWD", "CMD", "SIZE")
-	fmt.Println(strings.Repeat("-", 100))
+	byID := recordsByID()
+	fmt.Printf("%-8s %-20s %-8s %-32s %-12s %-9s %s\n", "ID", "NAME", "PID", "CWD", "CMD", "SIZE", "SESSION")
+	fmt.Println(strings.Repeat("-", 110))
 	for _, line := range strings.Split(out, "\n") {
 		parts := strings.SplitN(line, "\t", 6)
-		if len(parts) >= 6 {
-			cwd := parts[3]
-			if strings.HasPrefix(cwd, config.Home) {
-				cwd = "~" + cwd[len(config.Home):]
-			}
-			fmt.Printf("%-8s %-20s %-8s %-40s %-15s %s\n",
-				parts[0], parts[1], parts[2], cwd, parts[4], parts[5])
+		if len(parts) < 6 {
+			continue
+		}
+		cwd := parts[3]
+		if strings.HasPrefix(cwd, config.Home) {
+			cwd = "~" + cwd[len(config.Home):]
+		}
+		sess := ""
+		if rec, ok := byID[parts[0]]; ok {
+			sess = shortUUID(rec.SessionID)
+		}
+		fmt.Printf("%-8s %-20s %-8s %-32s %-12s %-9s %s\n",
+			parts[0], parts[1], parts[2], cwd, parts[4], parts[5], sess)
+		// Remote Control URL (only present when the pane's session has it
+		// active) is long — print it on an indented continuation line.
+		if rc := GetPaneRemoteControlURL(parts[0]); rc != "" {
+			fmt.Printf("%-8s rc → %s\n", "", rc)
 		}
 	}
 }
@@ -189,69 +206,41 @@ func termSpawn(args []string) {
 		os.Exit(1)
 	}
 
-	name := args[0]
-	cwd := ""
-	command := ""
-	mode := "interactive"
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		// Platform-appropriate fallback.
-		if _, err := exec.LookPath("bash"); err == nil {
-			shell = "bash"
-		} else if _, err := exec.LookPath("sh"); err == nil {
-			shell = "sh"
-		} else {
-			shell = "bash" // last resort, let it fail with a clear error
-		}
-	}
-
+	opts := SpawnOpts{Name: args[0], Mode: "interactive"}
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--cwd":
-			if i+1 < len(args) { cwd = args[i+1]; i++ }
+			if i+1 < len(args) {
+				opts.Cwd = args[i+1]
+				i++
+			}
 		case "--cmd":
-			if i+1 < len(args) { command = args[i+1]; i++ }
+			if i+1 < len(args) {
+				opts.Cmd = args[i+1]
+				i++
+			}
 		case "--mode":
-			if i+1 < len(args) { mode = args[i+1]; i++ }
+			if i+1 < len(args) {
+				opts.Mode = args[i+1]
+				i++
+			}
 		}
 	}
 
-	if cwd != "" {
-		cwd = strings.Replace(cwd, "~", config.Home, 1)
-	}
-
-	ensureSession()
-	session := tmuxSession()
-
-	// Create new pane
-	splitArgs := []string{"split-window", "-t", session, "-P", "-F", "#{pane_id}"}
-	if cwd != "" {
-		splitArgs = append(splitArgs, "-c", cwd)
-	}
-	paneID, err := tmuxRun(splitArgs...)
+	// Delegate to the library Spawn, which handles the split, title, retile,
+	// command, and name→id registration in one place. The local session id is
+	// backfilled lazily on the next list/snapshot, so spawn never blocks.
+	paneID, err := Spawn(opts)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai term: split-window in session %q failed: %v\n", session, err)
+		fmt.Fprintf(os.Stderr, "qai term: spawn %q failed: %v\n", opts.Name, err)
 		fmt.Fprintln(os.Stderr, "  -> fix: is tmux running? probe with `tmux ls`. Start a server with `tmux new-session -d -s mcp-terminals` (or set TERMINAL_MCP_SESSION to an existing session).")
 		os.Exit(1)
 	}
-	paneID = strings.TrimSpace(paneID)
 
-	// Set title
-	tmuxRun("select-pane", "-t", paneID, "-T", name)
-	// Tile layout
-	tmuxRun("select-layout", "-t", session, "tiled")
-
-	// Run command based on mode
-	if command != "" {
-		tmuxRun("send-keys", "-t", paneID, command, "Enter")
-	} else if mode == "background" {
-		cmd := "claude --allowedTools 'Bash(readonly),Edit,Read,Write,Glob,Grep,Agent'"
-		tmuxRun("send-keys", "-t", paneID, cmd, "Enter")
-	} else if mode == "resume" {
-		tmuxRun("send-keys", "-t", paneID, "claude --resume", "Enter")
+	fmt.Printf("Spawned %q in %s\n", opts.Name, paneID)
+	if rec, ok := AllRecords()[opts.Name]; ok && rec.SessionID != "" {
+		fmt.Printf("  session %s\n", rec.SessionID)
 	}
-
-	fmt.Printf("Spawned %q in %s\n", name, paneID)
 }
 
 func termSend(args []string) {
@@ -272,7 +261,7 @@ func termSend(args []string) {
 		os.Exit(1)
 	}
 
-	paneID, err := findPane(args[0])
+	paneID, err := resolvePane(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai term: %v\n", err)
 		os.Exit(1)
@@ -281,7 +270,9 @@ func termSend(args []string) {
 	input := args[1]
 	enter := true
 	for _, a := range args[2:] {
-		if a == "--no-enter" { enter = false }
+		if a == "--no-enter" {
+			enter = false
+		}
 	}
 
 	// Use load-buffer for complex/long input
@@ -488,7 +479,7 @@ func termRead(args []string) {
 		os.Exit(1)
 	}
 
-	paneID, err := findPane(args[0])
+	paneID, err := resolvePane(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai term: %v\n", err)
 		os.Exit(1)
@@ -501,7 +492,9 @@ func termRead(args []string) {
 			i++
 		}
 	}
-	if lines > 500 { lines = 500 }
+	if lines > 500 {
+		lines = 500
+	}
 
 	output := capturePane(paneID, lines)
 	fmt.Println(output)
@@ -513,7 +506,7 @@ func termClose(args []string) {
 		os.Exit(1)
 	}
 
-	paneID, err := findPane(args[0])
+	paneID, err := resolvePane(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai term: %v\n", err)
 		os.Exit(1)
@@ -521,7 +514,9 @@ func termClose(args []string) {
 
 	force := false
 	for _, a := range args[1:] {
-		if a == "--force" { force = true }
+		if a == "--force" {
+			force = true
+		}
 	}
 
 	if force {
@@ -538,6 +533,10 @@ func termClose(args []string) {
 		}
 	}
 
+	// Drop the registry record (by the ref the user gave, or by the resolved id).
+	_ = UnregisterPaneRef(args[0])
+	_ = UnregisterPaneRef(paneID)
+
 	fmt.Printf("Closed %q\n", args[0])
 }
 
@@ -547,7 +546,7 @@ func termSignal(args []string) {
 		os.Exit(1)
 	}
 
-	paneID, err := findPane(args[0])
+	paneID, err := resolvePane(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai term: %v\n", err)
 		os.Exit(1)
@@ -576,7 +575,7 @@ func termResize(args []string) {
 		os.Exit(1)
 	}
 
-	paneID, err := findPane(args[0])
+	paneID, err := resolvePane(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai term: %v\n", err)
 		os.Exit(1)
@@ -608,13 +607,24 @@ func termSnapshot() {
 		return
 	}
 
+	BackfillSessions()
+	byID := recordsByID()
 	for _, line := range strings.Split(out, "\n") {
 		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) < 2 { continue }
+		if len(parts) < 2 {
+			continue
+		}
 		paneID, title := parts[0], parts[1]
 		output := capturePane(paneID, 5)
 
-		fmt.Printf("━━━ %s ━━━\n", title)
+		header := fmt.Sprintf("━━━ %s [%s]", title, paneID)
+		if rec, ok := byID[paneID]; ok && rec.SessionID != "" {
+			header += fmt.Sprintf(" session=%s", shortUUID(rec.SessionID))
+		}
+		if rc := GetPaneRemoteControlURL(paneID); rc != "" {
+			header += fmt.Sprintf(" rc=%s", rc)
+		}
+		fmt.Printf("%s ━━━\n", header)
 		if output != "" {
 			fmt.Println(output)
 		} else {
@@ -630,7 +640,7 @@ func termWait(args []string) {
 		os.Exit(1)
 	}
 
-	paneID, err := findPane(args[0])
+	paneID, err := resolvePane(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "qai term: %v\n", err)
 		os.Exit(1)
@@ -645,7 +655,9 @@ func termWait(args []string) {
 			i++
 		}
 	}
-	if timeout > 120 { timeout = 120 }
+	if timeout > 120 {
+		timeout = 120
+	}
 
 	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
 
@@ -681,6 +693,12 @@ func termUsage() {
   qai term wait "name" "pattern" [--timeout 30]
 
 Modes: interactive (default), background (auto-approve safe tools), resume
+
+Pane names survive Claude Code's title rewrites: every spawn records a
+name→pane-id map at ~/.qai/term-panes.json, consulted before title matching, so
+send/read/close "name" keep working after a pane becomes "✳ Claude Code".
+list and snapshot show each pane's local Claude session id (and a Remote
+Control URL if one is active), backfilled lazily once the session exists.
 
 Batch JSON (qai term send --json [--fail-fast] [file]):
   {

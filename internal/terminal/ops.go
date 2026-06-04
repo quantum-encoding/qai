@@ -117,6 +117,13 @@ func spawnInternal(opts SpawnOpts, retile bool) (string, error) {
 		tmuxRun("send-keys", "-t", paneID, "claude --resume", "Enter")
 	}
 
+	// Persist the name→id mapping so later `qai term send/read <name>` survives
+	// Claude Code's title rewrite. The local session id is filled in lazily by
+	// BackfillSessions at list/snapshot time, once the transcript exists — so
+	// spawn never blocks waiting for claude to boot. Non-fatal: a registry
+	// failure must not fail the spawn itself.
+	_ = RegisterPane(opts.Name, paneID, cwd)
+
 	return paneID, nil
 }
 
@@ -211,6 +218,10 @@ func Close(pane string, force bool) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		_ = UnregisterPaneRef(pane)
+		_ = UnregisterPaneRef(paneID)
+	}()
 	if force {
 		_, err := tmuxRun("kill-pane", "-t", paneID)
 		return err
@@ -339,10 +350,14 @@ func Wait(pane, pattern string, timeout time.Duration) (string, error) {
 }
 
 // resolvePane accepts either a tmux pane id ("%4") or a name and returns
-// the canonical pane id.
+// the canonical pane id. Resolution order: literal id → persisted registry
+// (survives Claude Code's pane-title rewrites) → live title matching.
 func resolvePane(pane string) (string, error) {
 	if strings.HasPrefix(pane, "%") {
 		return pane, nil
+	}
+	if id, ok := lookupPaneID(pane); ok {
+		return id, nil
 	}
 	return findPane(pane)
 }

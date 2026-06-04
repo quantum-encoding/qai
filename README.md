@@ -349,6 +349,21 @@ rest. The command reports `✓`/`✗` per pane and exits non-zero if any failed.
 
 tmux is already the primitive. Session persistence across disconnects, SSH-from-anywhere, keyboard-driven pane navigation, scrollback search, working clipboard, integration with every terminal emulator. A custom agent-supervision GUI reinvents 90% of that badly. If your observability surface can't be attached from an SSH session on a phone, it's a status page, not an observability surface.
 
+#### Addressing panes by name, and session tracking
+
+There's a wrinkle: Claude Code rewrites its pane title to `✳ Claude Code` on startup, so once you spawn a few agents they all share one title and tmux can't tell them apart by name. `qai term` solves this the way `qai fleet` does — every `spawn` records a `name → %pane-id` mapping in `~/.qai/term-panes.json`, and resolution consults that map (verifying the id is still live, pruning it if not) *before* falling back to title matching. So `qai term send analyst "..."` keeps hitting the right pane for the life of the session, and `close` prunes the record.
+
+`list` and `snapshot` also surface, per pane:
+
+- **Local session id** — the `~/.claude/projects/<cwd>/<uuid>.jsonl` transcript the pane is running. It's filled in lazily (no blocking on spawn) by correlating each pane's spawn time with the transcript's *birth* time — birth, not mtime, because an active session's `.jsonl` is rewritten constantly but created once.
+- **Remote Control URL** — if a pane's Claude session has [Remote Control](https://code.claude.com/docs/en/remote-control) active (`claude --rc` / `/remote-control`), its `https://app.claude.com/rc/<id>` link is scraped from the pane buffer and shown, so you can open that agent on your phone or in a browser without disturbing it.
+
+```bash
+qai term spawn analyst --cwd /work/qai --mode background
+qai term send analyst "review internal/auth and report findings"   # by name, post-rewrite
+qai term list                                                       # shows NAME, SESSION, rc URL
+```
+
 ### Fleet (declarative parallel agent panes)
 
 `qai fleet` is the next layer up from `qai term`. Where `qai term spawn` is the imperative one-pane-at-a-time primitive, `qai fleet up <manifest.yaml>` brings up an entire fleet of agents from a single declarative file: `N` panes, each with its own working directory, agent kind (fresh or resumed), and prompt. Workers report status into a per-fleet inbox; a notifier daemon nudges the architect's pane when reports land.

@@ -262,6 +262,7 @@ Replaces MCP servers with direct CLI commands. Requires `tmux`.
 qai term list                         # list active terminals
 qai term spawn "name" [--cwd /path]   # create terminal pane
 qai term send "name" "input"          # send input to terminal
+qai term send --json [file]           # batch: shared body + per-pane messages
 qai term read "name" [--lines 50]     # read terminal output
 qai term close "name"                 # close terminal
 qai term snapshot                     # overview all terminals
@@ -301,6 +302,37 @@ qai term snapshot
 qai term read writer --lines 200
 qai term send redteam "sections 1 and 3 are approved; focus on 2 and 4"
 ```
+
+#### Batch send — one payload, shared body, per-pane messages
+
+The example above sends three prompts with three separate calls, and each
+prompt re-types the same shared context. `qai term send --json` collapses
+that into a single invocation: write the common context once, give each pane
+its own message. It reads a JSON payload from stdin (a heredoc) or a file.
+
+```bash
+qai term send --json <<'EOF'
+{
+  "shared": "Constraints we already agreed in this conversation: no marketing posts, no LinkedIn, arXiv preferred. House voice we've been refining all session.",
+  "shared_suffix": "Report back in this pane when done.",
+  "enter": true,
+  "messages": [
+    { "pane": "research", "message": "Gather recent papers on agent observability; write findings to facts.json." },
+    { "pane": "writer",   "message": "When facts.json exists, draft article.md; no claims outside facts.json." },
+    { "pane": "redteam",  "message": "Read article.md and flag every sentence not supported by a line in facts.json." }
+  ]
+}
+EOF
+```
+
+Each pane receives `shared` + its `message` + `shared_suffix`. If `shared`
+contains the token `{{message}}`, the per-pane message is substituted there
+instead of prepended — so the individual instruction can land mid-paragraph.
+`enter` sets the default submit behaviour; a per-message `enter` overrides it
+(useful for a pane you want to stage but not yet fire). Panes are sent
+serially — tmux's paste buffer is a single global clipboard, so concurrent
+sends would stomp each other. The command reports `✓`/`✗` per pane and exits
+non-zero if any send failed.
 
 #### Two mitigations worth building in
 

@@ -138,7 +138,13 @@ func Send(pane, input string, withEnter bool) error {
 			return fmt.Errorf("write temp file: %v", err)
 		}
 		defer os.Remove(tmpFile)
-		if _, err := tmuxRun("load-buffer", tmpFile); err != nil {
+		// Per-pane named buffer instead of tmux's anonymous global
+		// clipboard. A batch run pastes into many panes back-to-back;
+		// an anonymous buffer is the single shared clipboard, so if the
+		// user copies something mid-run (or two sends ever interleave)
+		// the buffers collide. A unique name per pane isolates the send.
+		buf := "qai_send_" + strings.TrimPrefix(paneID, "%")
+		if _, err := tmuxRun("load-buffer", "-b", buf, tmpFile); err != nil {
 			return fmt.Errorf("load-buffer: %v", err)
 		}
 		// -p enables bracketed-paste mode (wraps the bytes in
@@ -147,7 +153,8 @@ func Send(pane, input string, withEnter bool) error {
 		// multi-line compose; the follow-up Enter just appends a line
 		// instead of submitting. With bracketed paste, Claude Code
 		// recognises a paste block and the trailing Enter submits.
-		if _, err := tmuxRun("paste-buffer", "-p", "-t", paneID); err != nil {
+		// -d deletes the named buffer once pasted, so it never lingers.
+		if _, err := tmuxRun("paste-buffer", "-d", "-p", "-b", buf, "-t", paneID); err != nil {
 			return fmt.Errorf("paste-buffer: %v", err)
 		}
 		if withEnter {

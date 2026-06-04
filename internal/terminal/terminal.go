@@ -259,14 +259,16 @@ func termSend(args []string) {
 	// (stdin by default, or a file path / "-") and fans a shared body +
 	// per-pane messages out to many panes in a single invocation. See
 	// termSendBatch for the schema.
-	if len(args) >= 1 && args[0] == "--json" {
-		termSendBatch(args[1:])
+	// A leading flag (`--json`, `--fail-fast`) selects batch mode. Plain
+	// send takes a pane name first, which never starts with "--".
+	if len(args) >= 1 && strings.HasPrefix(args[0], "--") {
+		termSendBatch(args)
 		return
 	}
 
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: qai term send \"name\" \"input\" [--no-enter]")
-		fmt.Fprintln(os.Stderr, "       qai term send --json [file]   (batch: shared body + per-pane messages)")
+		fmt.Fprintln(os.Stderr, "       qai term send --json [--fail-fast] [file]   (batch: shared body + per-pane messages)")
 		os.Exit(1)
 	}
 
@@ -337,33 +339,67 @@ type batchMessage struct {
 	Enter   *bool  `json:"enter"` // per-pane override of the top-level default
 }
 
-// mergeMessage combines the shared body with a per-pane message. If shared
-// contains the {{message}} token the message is substituted there; otherwise
-// shared is used as a prefix. shared_suffix, if set, is always appended.
-func mergeMessage(shared, suffix, msg string) string {
+// mergeMessage combines the shared body with a per-pane message and
+// substitutes template tokens. If shared contains {{message}} the per-pane
+// message is substituted there; otherwise shared is a prefix. shared_suffix,
+// if set, is always appended. {{pane}} (anywhere in the result) becomes the
+// pane identifier. Empty parts are dropped so we never emit stray blank lines.
+func mergeMessage(shared, suffix, msg, pane string) string {
 	var body string
-	switch {
-	case strings.Contains(shared, "{{message}}"):
+	if strings.Contains(shared, "{{message}}") {
 		body = strings.ReplaceAll(shared, "{{message}}", msg)
-	case shared != "":
-		body = shared + "\n\n" + msg
-	default:
-		body = msg
+	} else {
+		body = joinNonEmpty("\n\n", shared, msg)
 	}
-	if suffix != "" {
-		body += "\n\n" + suffix
-	}
+	body = joinNonEmpty("\n\n", body, suffix)
+	body = strings.ReplaceAll(body, "{{pane}}", pane)
 	return body
 }
 
+// joinNonEmpty joins only the non-empty parts with sep, so an absent shared
+// body or suffix doesn't leave a double newline in the merged message.
+func joinNonEmpty(sep string, parts ...string) string {
+	kept := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, sep)
+}
+
 func termSendBatch(args []string) {
-	// Resolve the input source: a file path argument, or "-"/none for stdin.
+	// Parse flags. --json is the mode selector; --fail-fast aborts on the
+	// first send error; any remaining positional is the payload file
+	// ("-" or none means stdin). Flags may appear in any order.
+	failFast := false
+	hasJSON := false
+	file := ""
+	for _, a := range args {
+		switch {
+		case a == "--json":
+			hasJSON = true
+		case a == "--fail-fast":
+			failFast = true
+		case a == "-":
+			file = "" // explicit stdin
+		default:
+			file = a // payload file path
+		}
+	}
+	if !hasJSON {
+		fmt.Fprintln(os.Stderr, "qai term: batch mode requires --json")
+		fmt.Fprintln(os.Stderr, "usage: qai term send --json [--fail-fast] [file]")
+		os.Exit(1)
+	}
+
+	// Resolve the input source.
 	var raw []byte
 	var err error
-	if len(args) >= 1 && args[0] != "-" {
-		raw, err = os.ReadFile(args[0])
+	if file != "" {
+		raw, err = os.ReadFile(file)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "qai term: read %q: %v\n", args[0], err)
+			fmt.Fprintf(os.Stderr, "qai term: read %q: %v\n", file, err)
 			os.Exit(1)
 		}
 	} else {
@@ -390,33 +426,54 @@ func termSendBatch(args []string) {
 		defaultEnter = *payload.Enter
 	}
 
-	// Serial fan-out. tmux's paste buffer (load-buffer/paste-buffer) is a
-	// single global clipboard — concurrent sends would stomp each other,
-	// so we iterate one pane at a time, same as the fleet runner.
-	failures := 0
-	for _, m := range payload.Messages {
+	// Pre-flight: resolve every pane before touching any. The batch is
+	// atomic — if a single pane can't be resolved we report all the
+	// failures and exit without sending anything, so a typo in the last
+	// message doesn't leave the first N panes half-driven.
+	paneIDs := make([]string, len(payload.Messages))
+	var preflight []string
+	for i, m := range payload.Messages {
 		if m.Pane == "" {
-			fmt.Fprintln(os.Stderr, "✗ (skipped: message with empty \"pane\")")
-			failures++
+			preflight = append(preflight, fmt.Sprintf("message %d: empty \"pane\"", i))
 			continue
 		}
+		id, err := resolvePane(m.Pane)
+		if err != nil {
+			preflight = append(preflight, fmt.Sprintf("%s: %v", m.Pane, err))
+			continue
+		}
+		paneIDs[i] = id
+	}
+	if len(preflight) > 0 {
+		fmt.Fprintln(os.Stderr, "qai term: pre-flight failed, nothing sent:")
+		for _, e := range preflight {
+			fmt.Fprintf(os.Stderr, "  ✗ %s\n", e)
+		}
+		os.Exit(1)
+	}
+
+	// Serial fan-out. tmux's paste buffer is a single global clipboard, so
+	// concurrent sends would stomp each other — we go one pane at a time.
+	// (Send uses a per-pane named buffer to avoid clobbering the user's own
+	// clipboard mid-run.) Panes are pre-resolved above, so the only error
+	// here is a send/paste failure.
+	failures := 0
+	for i, m := range payload.Messages {
 		enter := defaultEnter
 		if m.Enter != nil {
 			enter = *m.Enter
 		}
-		paneID, err := resolvePane(m.Pane)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "✗ %s: %v\n", m.Pane, err)
+		body := mergeMessage(payload.Shared, payload.SharedSuffix, m.Message, m.Pane)
+		if err := Send(paneIDs[i], body, enter); err != nil {
+			fmt.Fprintf(os.Stderr, "✗ %s (%s): %v\n", m.Pane, paneIDs[i], err)
 			failures++
+			if failFast {
+				fmt.Fprintf(os.Stderr, "qai term: --fail-fast — aborting after %d/%d sent\n", i, len(payload.Messages))
+				os.Exit(1)
+			}
 			continue
 		}
-		body := mergeMessage(payload.Shared, payload.SharedSuffix, m.Message)
-		if err := Send(paneID, body, enter); err != nil {
-			fmt.Fprintf(os.Stderr, "✗ %s (%s): %v\n", m.Pane, paneID, err)
-			failures++
-			continue
-		}
-		fmt.Printf("✓ %s (%s)\n", m.Pane, paneID)
+		fmt.Printf("✓ %s (%s)\n", m.Pane, paneIDs[i])
 	}
 
 	fmt.Printf("sent %d/%d\n", len(payload.Messages)-failures, len(payload.Messages))
@@ -615,7 +672,7 @@ func termUsage() {
   qai term list                               List all active terminals
   qai term spawn "name" [--cwd /path] [--cmd "command"] [--mode M]
   qai term send "name" "input" [--no-enter]   Send input to terminal
-  qai term send --json [file]                 Batch: shared body + per-pane messages (stdin or file)
+  qai term send --json [--fail-fast] [file]   Batch: shared body + per-pane messages (stdin or file)
   qai term read "name" [--lines 50]           Read terminal output
   qai term close "name" [--force]             Close terminal
   qai term signal "name" <ctrl-c|ctrl-d|...>  Send signal
@@ -625,7 +682,7 @@ func termUsage() {
 
 Modes: interactive (default), background (auto-approve safe tools), resume
 
-Batch JSON (qai term send --json):
+Batch JSON (qai term send --json [--fail-fast] [file]):
   {
     "shared": "common preamble (use {{message}} to place each pane's text inline)",
     "shared_suffix": "optional trailer appended to every message",
@@ -636,6 +693,9 @@ Batch JSON (qai term send --json):
     ]
   }
   Each pane gets shared + message (or {{message}} substituted) + shared_suffix.
-  Panes are sent serially (tmux's paste buffer is a single global clipboard).
+  Tokens: {{message}} = the pane's message, {{pane}} = the pane name/id.
+  All panes are resolved up front — if any is unknown, nothing is sent.
+  --fail-fast aborts on the first send error (default: send all, report ✓/✗).
+  Panes are sent serially via a per-pane named buffer (clipboard-safe).
 `)
 }

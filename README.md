@@ -325,14 +325,20 @@ qai term send --json <<'EOF'
 EOF
 ```
 
-Each pane receives `shared` + its `message` + `shared_suffix`. If `shared`
-contains the token `{{message}}`, the per-pane message is substituted there
-instead of prepended — so the individual instruction can land mid-paragraph.
-`enter` sets the default submit behaviour; a per-message `enter` overrides it
-(useful for a pane you want to stage but not yet fire). Panes are sent
-serially — tmux's paste buffer is a single global clipboard, so concurrent
-sends would stomp each other. The command reports `✓`/`✗` per pane and exits
-non-zero if any send failed.
+Each pane receives `shared` + its `message` + `shared_suffix`. Two template
+tokens are substituted in the merged text: `{{message}}` (the per-pane
+message — if present in `shared`, the message lands there inline instead of
+being prepended) and `{{pane}}` (the pane name/id). `enter` sets the default
+submit behaviour; a per-message `enter` overrides it (useful for a pane you
+want to stage but not yet fire).
+
+The batch is **atomic**: every pane is resolved up front, and if any one is
+unknown the command reports all the failures and exits without sending a
+single message — a typo in the last entry won't half-drive the earlier panes.
+Sends are serial and each uses a per-pane tmux *named* buffer (`qai_send_<id>`,
+deleted after paste), so a long run can't collide with your own clipboard.
+Pass `--fail-fast` to abort on the first send error instead of attempting the
+rest. The command reports `✓`/`✗` per pane and exits non-zero if any failed.
 
 #### Two mitigations worth building in
 

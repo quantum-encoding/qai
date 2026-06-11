@@ -3,7 +3,7 @@
 // model-specific request shape the broker forwards to each provider.
 //
 // Why this exists: each image model takes a different parameter
-// vocabulary. Gemini 3 Pro uses `aspect_ratio` + `resolution` (1K/2K),
+// vocabulary. Gemini 3 Pro uses `aspect_ratio` + `resolution` (1K/2K/4K),
 // Gemini Flash variants use `aspect_ratio` only (no resolution param),
 // OpenAI uses a single `size` enum that bakes aspect into pixel dims
 // (1024x1024 / 1024x1536 / 1536x1024 / auto), plus `quality` +
@@ -30,7 +30,7 @@ type imageFamily int
 
 const (
 	famUnknown imageFamily = iota
-	famGeminiPro            // gemini-3-pro-image-preview — aspect + resolution(1K/2K)
+	famGeminiPro            // gemini-3-pro-image-preview — aspect + resolution(1K/2K/4K)
 	famGeminiFlash          // 2.5-flash-image, 3.1-flash-image-preview — aspect only
 	famOpenAI               // gpt-image-1, gpt-image-2 — size enum + quality + bg + format
 	famGrokImage            // grok-imagine-image, grok-imagine-image-quality — n only (today)
@@ -65,7 +65,7 @@ type imageFlags struct {
 	prompt     string
 	count      int    // --count N, 0 = unset
 	aspect     string // --aspect 16:9
-	size       string // --size — overloaded: tier (1K/2K) OR pixels (1024x1024)
+	size       string // --size — overloaded: tier (1K/2K/4K) OR pixels (1024x1024)
 	quality    string // --quality low|medium|high|auto
 	background string // --background transparent|opaque|auto
 	format     string // --format png|jpeg|webp
@@ -122,7 +122,7 @@ func applyGeminiPro(f *imageFlags, body map[string]any) {
 			body["resolution"] = tier
 			fmt.Fprintf(os.Stderr,
 				"qai image: --size %s isn't a Gemini tier; using resolution=%s "+
-					"(Gemini 3 Pro accepts 1K or 2K)\n", f.size, tier)
+					"(Nano Banana Pro accepts 1K, 2K, or 4K)\n", f.size, tier)
 		}
 	}
 	warnDrop(f.quality, "--quality", f.model)
@@ -211,34 +211,41 @@ func applyPassthrough(f *imageFlags, body map[string]any) {
 
 // ─── translation helpers ───────────────────────────────────────────────────
 
-// asResolutionTier returns ("1K"|"2K", true) if the input is a tier
+// asResolutionTier returns ("1K"|"2K"|"4K", true) if the input is a tier
 // string. Case-insensitive. Anything else returns false so the caller
-// can decide whether to snap or pass through.
+// can decide whether to snap or pass through. Nano Banana Pro
+// (gemini-3-pro-image-preview) supports all three tiers.
 func asResolutionTier(s string) (string, bool) {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
 	case "1K":
 		return "1K", true
 	case "2K":
 		return "2K", true
+	case "4K":
+		return "4K", true
 	}
 	return "", false
 }
 
-// pixelsToGeminiTier picks the closest supported Gemini tier for a
-// WxH input. Tier breakpoint chosen at the geometric mean of 1K and 2K
-// (≈1414 on a side), so a "1024x..." input goes to 1K and "2048x..."
-// goes to 2K. Anything unparsable defaults to "2K" — Gemini Pro's own
-// default — which is the right "I don't know, give me the good one"
-// fallback.
+// pixelsToGeminiTier picks the closest supported Gemini tier (1K/2K/4K)
+// for a WxH input. Breakpoints sit at the geometric means between
+// adjacent tiers (≈1448 between 1K/2K, ≈2896 between 2K/4K), so a
+// "1024x..." input → 1K, "2048x..." → 2K, "3840x..." → 4K. Anything
+// unparsable defaults to "2K" — the sensible "give me the good one"
+// fallback (not 4K, which is markedly more expensive).
 func pixelsToGeminiTier(size string) string {
 	w, _ := parseWxH(size)
 	if w <= 0 {
 		return "2K"
 	}
-	if w <= 1414 {
+	switch {
+	case w <= 1448:
 		return "1K"
+	case w <= 2896:
+		return "2K"
+	default:
+		return "4K"
 	}
-	return "2K"
 }
 
 func parseWxH(s string) (w, h int) {

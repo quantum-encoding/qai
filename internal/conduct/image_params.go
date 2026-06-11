@@ -178,11 +178,27 @@ func applyGrokImage(f *imageFlags, body map[string]any) {
 	if f.count > 0 {
 		body["n"] = f.count
 	}
-	// Grok Imagine doesn't advertise aspect/size/quality in the broker
-	// schema today. Warn-and-drop so swapping in a Grok model in a batch
-	// doesn't silently error.
-	warnDrop(f.aspect, "--aspect", f.model)
-	warnDrop(f.size, "--size", f.model)
+	// Grok Imagine Quality accepts aspect_ratio + resolution (1K/2K); the
+	// base grok-imagine-image is n-only. Forward for the quality variant,
+	// warn-and-drop for the base so a model swap in a batch doesn't error.
+	if strings.Contains(strings.ToLower(f.model), "quality") {
+		if f.aspect != "" {
+			body["aspect_ratio"] = f.aspect
+		}
+		switch strings.ToUpper(strings.TrimSpace(f.size)) {
+		case "":
+			// no --size
+		case "1K", "2K":
+			// Send the tier; the broker lowercases it for xAI.
+			body["resolution"] = strings.ToUpper(strings.TrimSpace(f.size))
+		default:
+			fmt.Fprintf(os.Stderr,
+				"qai image: %s accepts resolution 1K or 2K; dropping --size %s\n", f.model, f.size)
+		}
+	} else {
+		warnDrop(f.aspect, "--aspect", f.model)
+		warnDrop(f.size, "--size", f.model)
+	}
 	warnDrop(f.quality, "--quality", f.model)
 	warnDrop(f.background, "--background", f.model)
 	warnDrop(f.format, "--format", f.model)

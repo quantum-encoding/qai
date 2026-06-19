@@ -795,7 +795,7 @@ func conductImageEdit(args []string) {
 
 func conductVideo(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: qai conduct video \"prompt\" [--model M] [--duration N]")
+		fmt.Fprintln(os.Stderr, "usage: qai conduct video \"prompt\" [--model M] [--duration 1-10] [--aspect 16:9] [--resolution 480p|720p] [--image first-frame.png]")
 		os.Exit(1)
 	}
 
@@ -812,9 +812,28 @@ func conductVideo(args []string) {
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--model":
-			if i+1 < len(args) { params["model"] = args[i+1]; i++ }
+			if i+1 < len(args) { params["model"] = resolveAudioModel(args[i+1], map[string]string{"xai": "grok-imagine-video", "grok": "grok-imagine-video"}); i++ }
 		case "--duration":
 			if i+1 < len(args) { params["duration_seconds"] = parseIntArg(args[i+1]); i++ }
+		case "--aspect", "--aspect-ratio":
+			if i+1 < len(args) { params["aspect_ratio"] = args[i+1]; i++ }
+		case "--resolution":
+			if i+1 < len(args) { params["resolution"] = args[i+1]; i++ }
+		case "--image":
+			// Image-to-video: condition grok-imagine-video on a first
+			// frame. Encode the local image as a data URL the worker
+			// normalises into the provider's image_url field.
+			if i+1 < len(args) {
+				img, rerr := os.ReadFile(args[i+1])
+				if rerr != nil {
+					fmt.Fprintf(os.Stderr, "qai conduct video: cannot read --image %s: %v\n", args[i+1], rerr)
+					os.Exit(1)
+				}
+				mime := "image/jpeg"
+				if strings.HasSuffix(strings.ToLower(args[i+1]), ".png") { mime = "image/png" }
+				params["image_url"] = "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(img)
+				i++
+			}
 		}
 	}
 

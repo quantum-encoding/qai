@@ -920,14 +920,19 @@ Providers:
   sora                 OpenAI Sora
 
 Flags:
-  --model <id>       Override model id
-  --duration <sec>   Duration in seconds (default 8)
+  --model <id>          Override model id (xai|grok → grok-imagine-video)
+  --duration <sec>      Duration in seconds (default 8; grok 1–10)
+  --aspect <ratio>      Aspect ratio, e.g. 16:9, 9:16, 1:1 (grok)
+  --resolution <r>      480p or 720p (grok)
+  --image <path>        Image-to-video: animate a first frame (grok).
+                        PNG/JPEG encoded and sent as the seed frame.
 
 Output:
   Video job is queued; job id printed. Poll with: qai conduct job <id>
 
-Example:
-  qai video "drone shot over icy mountains" --duration 10
+Examples:
+  qai video "drone shot over icy mountains" --duration 10 --aspect 16:9 --resolution 720p
+  qai video "make this photo come alive" --image ~/Pictures/cat.png
 
 Related:
   qai conduct job <id>   — check job state

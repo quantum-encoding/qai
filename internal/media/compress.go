@@ -64,6 +64,111 @@ func shouldCompress(path, mimeType string) bool {
 	return false
 }
 
+// imageMaxEdge is the longest-side pixel cap we downscale oversized
+// stills to before upload. Gemini tiles images at ~768px and gains
+// nothing from more than ~1–2 native tiles of detail; 2048 keeps small
+// handwriting crisp while turning a 5712×4284 (~3.6 MB HEIC) phone photo
+// into a ~300–600 KB JPEG. Bigger uploads cost wall-clock and tokens for
+// detail the model never resolves.
+const imageMaxEdge = 2048
+
+// imageJPEGQuality is the sips formatOptions quality (0–100) for the
+// re-encoded JPEG. 80 is visually lossless for text/line art at this
+// resolution and roughly halves the file vs 95.
+const imageJPEGQuality = 80
+
+// imageCompressThreshold mirrors compressionThreshold but for stills:
+// JPEG/PNG/WebP already under this are uploaded untouched. HEIC/HEIF are
+// ALWAYS converted regardless of size (Vertex's image support is happiest
+// with JPEG/PNG, and converting is the user's explicit ask) — see
+// needsImageConversion.
+const imageCompressThreshold = 1 * 1024 * 1024
+
+// needsImageConversion decides whether a still gets re-encoded to JPEG
+// before upload. True when: the source is HEIC/HEIF (always convert), or
+// it's a raster image over the size threshold (downscale + recompress).
+// PDFs and already-small JPEG/PNG/WebP pass through untouched.
+func needsImageConversion(path, mimeType string) bool {
+	switch mimeType {
+	case "image/heic", "image/heif":
+		return true
+	case "image/jpeg", "image/png", "image/webp":
+		info, err := os.Stat(path)
+		if err != nil {
+			return false
+		}
+		return info.Size() >= imageCompressThreshold
+	}
+	return false
+}
+
+// compressImage converts a still to a downscaled JPEG in ~/.qai/tmp/ and
+// returns its path. Uses macOS `sips` (always present on darwin, reads
+// HEIC natively); on other platforms or when sips is missing it returns
+// a clear error pointing at --no-compress / --mime so the user can still
+// upload a pre-converted file. Caller trashes the sidecar after upload.
+//
+// sips flags:
+//
+//	-s format jpeg                 re-encode to JPEG
+//	-s formatOptions <q>           quality 0–100
+//	-Z <edge>                      resample so the LONGEST side == edge,
+//	                               aspect preserved, never upscales
+//	--out <path>                   write sidecar, leave the original alone
+func compressImage(srcPath, mimeType string) (string, error) {
+	_ = mimeType // reserved for per-format tuning (HEIC depth, PNG alpha, …)
+
+	sips, err := exec.LookPath("sips")
+	if err != nil {
+		return "", fmt.Errorf(
+			"image conversion needs `sips` (macOS only) and it was not found on PATH — "+
+				"convert %s to JPEG yourself and re-run, or pass --no-compress to upload as-is "+
+				"(note: some models reject HEIC)", filepath.Base(srcPath))
+	}
+
+	tmpRoot, err := tmpDir()
+	if err != nil {
+		return "", err
+	}
+
+	srcInfo, err := os.Stat(srcPath)
+	if err != nil {
+		return "", fmt.Errorf("stat %s: %w", srcPath, err)
+	}
+
+	stem := filenameStem(filepath.Base(srcPath))
+	outPath := filepath.Join(tmpRoot, stem+".converted.jpg")
+
+	fmt.Fprintf(os.Stderr, "qai media: converting %s (%s) → JPEG ≤%dpx q%d\n",
+		filepath.Base(srcPath), humanBytes(srcInfo.Size()), imageMaxEdge, imageJPEGQuality)
+
+	cmd := exec.Command(sips,
+		"-s", "format", "jpeg",
+		"-s", "formatOptions", strconv.Itoa(imageJPEGQuality),
+		"-Z", strconv.Itoa(imageMaxEdge),
+		srcPath,
+		"--out", outPath,
+	)
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
+	if err := cmd.Run(); err != nil {
+		tail := strings.TrimSpace(stderrBuf.String())
+		return "", fmt.Errorf("sips failed: %w%s", err, formatStderr(tail))
+	}
+
+	outInfo, err := os.Stat(outPath)
+	if err != nil {
+		return "", fmt.Errorf("stat converted output: %w", err)
+	}
+	if outInfo.Size() == 0 {
+		return "", fmt.Errorf("converted output is empty — sips produced no data")
+	}
+	fmt.Fprintf(os.Stderr, "qai media: converted to %s (%.0fx smaller)\n",
+		humanBytes(outInfo.Size()),
+		float64(srcInfo.Size())/float64(outInfo.Size()))
+	return outPath, nil
+}
+
 // compressVideo runs the ffmpeg pipeline above with a live progress
 // bar (when stderr is a TTY) and returns the path to the compressed
 // sidecar. The output lives in ~/.qai/tmp/ so it's easy to clean up;

@@ -19,7 +19,6 @@ import (
 // follow-ups.
 func cmdOneShot(args []string) {
 	args, model := stripModelFlag(args)
-	model = resolveModel(model)
 	args, explicitSystem, _ := stripFlag(args, "--system")
 	args, templateName, _ := stripFlag(args, "--template")
 	args, templateNameShort, _ := stripFlag(args, "-t")
@@ -29,17 +28,66 @@ func cmdOneShot(args []string) {
 	args, mimeOverride, _ := stripFlag(args, "--mime")
 	args, noCompress := stripBoolFlag(args, "--no-compress")
 	args, maxTokensStr, _ := stripFlag(args, "--max-tokens")
+	// Document-vision flags. --transcribe / --translate select a built-in
+	// faithful handwriting→Markdown prompt (see prompts.go) so the user
+	// doesn't pass a prompt string. --to sets the translation target.
+	args, transcribe := stripBoolFlag(args, "--transcribe")
+	args, translate := stripBoolFlag(args, "--translate")
+	args, targetLang, _ := stripFlag(args, "--to")
+	// Output-to-file (parity with `qai media chat -o`).
+	args, outPath, _ := stripFlag(args, "--output")
+	args, outShort, _ := stripFlag(args, "-o")
+	if outPath == "" {
+		outPath = outShort
+	}
+	args, appendOut := stripBoolFlag(args, "--append")
+
+	docMode := transcribe || translate
+	// --to implies translation even if --translate was omitted.
+	if targetLang != "" {
+		translate = true
+		docMode = true
+	}
+
+	// Default model: document-vision modes want the strong 3.5 Flash;
+	// everything else keeps the cheap flash-lite default.
+	if model == "" && docMode {
+		model = "gemini-3.5-flash"
+	}
+	model = resolveModel(model)
+
 	// One-shot supports system instructions via prepending a system
 	// message — it's a single turn so we don't need the cache for it.
+	// In doc mode the built-in transcription system prompt applies unless
+	// the user passed an explicit --system/--template override.
 	system := resolveSystemInstruction(explicitSystem, templateName)
-
-	if len(args) < 2 {
-		diefatal("one-shot needs <file> <prompt>; got %d args. Example: qai media ~/lecture.mp4 \"summarise\"", len(args))
+	if docMode && explicitSystem == "" && templateName == "" {
+		system = transcribeSystem
 	}
-	filePath := args[0]
-	prompt := joinPrompt(args[1:])
-	if prompt == "" {
-		diefatal("prompt cannot be empty")
+
+	var filePath, prompt string
+	if docMode {
+		// Doc mode: only <file> is required — the prompt is built-in.
+		if len(args) < 1 {
+			diefatal("--transcribe/--translate needs <file>. Example: qai media --transcribe ~/page.heic")
+		}
+		filePath = args[0]
+		// Any trailing positional text becomes an extra instruction
+		// appended to the built-in prompt (e.g. "ignore the margin notes").
+		extra := joinPrompt(args[1:])
+		prompt = buildDocPrompt(transcribe, translate, targetLang)
+		if extra != "" {
+			prompt += "\n\nAdditional instruction: " + extra
+		}
+	} else {
+		if len(args) < 2 {
+			diefatal("one-shot needs <file> <prompt>; got %d args. Example: qai media ~/lecture.mp4 \"summarise\"", len(args))
+		}
+		filePath = args[0]
+		prompt = joinPrompt(args[1:])
+		if prompt == "" {
+			diefatal("prompt cannot be empty")
+		}
 	}
 
 	upload, cleanup, err := uploadFile(filePath, mimeOverride, noCompress)
@@ -106,5 +154,10 @@ func cmdOneShot(args []string) {
 			sb.WriteString(blk.Text)
 		}
 	}
-	fmt.Println(sb.String())
+	out := sb.String()
+	if outPath != "" {
+		writeOutput(outPath, out, appendOut)
+		return
+	}
+	fmt.Println(out)
 }

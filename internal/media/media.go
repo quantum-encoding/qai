@@ -170,6 +170,14 @@ var modelAliases = map[string]string{
 	"gemini-flash":     "gemini-3.5-flash",
 	"gemini-flash-pro": "gemini-3-flash-preview",
 	"gemini-pro":       "gemini-3.1-pro-preview",
+	// 3.5 Flash shorthands — the strong document-vision model behind
+	// --transcribe/--translate. Both the dotted and dashed forms resolve
+	// so `-m 3-5-flash` (shell-friendly, no dot) and `-m 3.5-flash` work.
+	"3.5-flash":   "gemini-3.5-flash",
+	"3-5-flash":   "gemini-3.5-flash",
+	"flash-3.5":   "gemini-3.5-flash",
+	"flash35":     "gemini-3.5-flash",
+	"gemini-3.5":  "gemini-3.5-flash",
 }
 
 const helpMedia = `qai media — multimodal chat with cached uploads
@@ -178,6 +186,22 @@ One-shot:
   qai media <file> "prompt"
     Uploads <file>, asks one question, prints the answer. The cache
     is released afterward — for follow-ups, use chat mode instead.
+
+Document vision (handwriting / printed page → Markdown):
+  qai media --transcribe <file>
+    Faithful verbatim transcription of a photographed page to Markdown.
+    No prompt needed — a built-in "transcribe exactly, never summarise"
+    template is used. HEIC/HEIF and oversized photos are auto-converted
+    to a downscaled JPEG (≤2048px) before upload. Defaults to the
+    gemini-3.5-flash model.
+
+  qai media --translate --to Spanish <file>
+    Transcribe faithfully, then output ONLY the translation.
+
+  qai media --transcribe --translate --to French <file> -o page.md
+    Output the verbatim transcription AND a translation section, saved
+    to page.md. (--to defaults to English; --to alone implies --translate.)
+    Any trailing text after <file> is appended as an extra instruction.
 
 Multi-turn (cached):
   qai media chat <file> "first prompt"
@@ -236,11 +260,17 @@ Flags (all subcommands):
                         video/mp4). Auto-detection works from the
                         extension; pass this if your file has an
                         unusual extension.
-  --no-compress         Skip the auto-compress step for files >20 MB
-                        (default behaviour: re-encode video to
-                        480p/1fps/64kbps mono before upload — turns
-                        a 150 MB lecture into ~5 MB with no loss for
-                        narration content).
+  --no-compress         Skip the auto-compress step. By default video
+                        >20 MB is re-encoded to 480p/1fps/64kbps mono,
+                        and HEIC/HEIF + images >1 MB are converted to a
+                        downscaled JPEG (≤2048px, q80) before upload.
+
+  --transcribe          Doc-vision: faithful verbatim page → Markdown.
+  --translate           Doc-vision: translate the page (pairs with --to).
+  --to <language>       Translation target (default English). Implies
+                        --translate.
+  -o, --output <file>   Save the answer to a file instead of stdout.
+  --append              With -o, append to the file instead of overwriting.
   --ttl <seconds>       Cache TTL. Default: 3600 (1h). Min 60, max 86400.
   --max-tokens <n>      Cap output tokens per turn.
 

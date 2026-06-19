@@ -82,7 +82,17 @@ func uploadFile(path, mimeOverride string, noCompress bool) (*uploadResponse, fu
 
 	uploadPath := path
 	cleanup := func() {}
-	if !noCompress && shouldCompress(path, mime) {
+	removeSidecar := func(p string) func() {
+		return func() {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "qai media: leftover temp file at %s (cleanup failed: %v)\n", p, err)
+			}
+		}
+	}
+	switch {
+	case noCompress:
+		// Upload the original bytes untouched.
+	case shouldCompress(path, mime):
 		compressed, err := compressVideo(path, mime)
 		if err != nil {
 			return nil, func() {}, fmt.Errorf("compress: %w", err)
@@ -92,11 +102,15 @@ func uploadFile(path, mimeOverride string, noCompress bool) (*uploadResponse, fu
 		// the source was webm/quicktime, because ffmpeg's pipeline
 		// settles on H.264+AAC inside an mp4 container.
 		mime = "video/mp4"
-		cleanup = func() {
-			if err := os.Remove(uploadPath); err != nil && !os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "qai media: leftover compressed file at %s (cleanup failed: %v)\n", uploadPath, err)
-			}
+		cleanup = removeSidecar(uploadPath)
+	case needsImageConversion(path, mime):
+		converted, err := compressImage(path, mime)
+		if err != nil {
+			return nil, func() {}, fmt.Errorf("convert image: %w", err)
 		}
+		uploadPath = converted
+		mime = "image/jpeg" // sips pipeline always settles on JPEG
+		cleanup = removeSidecar(uploadPath)
 	}
 
 	content, err := os.ReadFile(uploadPath)

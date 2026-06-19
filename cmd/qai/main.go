@@ -940,38 +940,59 @@ Usage:
 
 Flags:
   --model <id>    TTS model or provider alias (default: tts-1)
-                  Aliases: xai|grok → grok-tts (great quality, voice "eve")
+                  Aliases: xai|grok → grok-tts (best quality)
                            gemini    → gemini-2.5-flash-preview-tts
                            openai    → tts-1
                            eleven    → eleven_multilingual_v2
-  --voice <id>    Voice. OpenAI: alloy, echo, fable, onyx, nova, shimmer.
-                  xAI default: eve. ElevenLabs: friendly name or voice id
-                  (see: qai conduct clone-voice / qai conduct voices).
-  --language <c>  ISO 639-1 code (es, fr, ca, …). xAI/grok: REQUIRED for
-                  natural non-English speech — without it the text is
-                  spoken with English pronunciation and sounds robotic.
+  --voice <id>    Voice (see per-provider list below).
+  --language <c>  Language code. xAI: BCP-47 or "auto" (default). Set it
+                  for natural non-English speech — an English default
+                  pronounces other languages with English phonetics
+                  (the "robotic" failure). Gemini: ISO 639-1.
+  --speed <n>     Speech speed multiplier, xAI range 0.7–1.5 (1.0 normal).
   --format <fmt>  mp3 (default), wav, opus, aac, flac, pcm.
-  --sample-rate <hz>  Output sample rate (xAI). Default 44100 for grok
-                      (CD quality), else provider default.
-  --bit-rate <bps>    Output bit rate (xAI), e.g. 128000.
+  --sample-rate <hz>  xAI sample rate: 8000/16000/22050/24000/44100/48000.
+                      grok defaults to 44100 (CD) when unset.
+  --bit-rate <bps>    xAI bit rate, e.g. 128000 or 192000.
 
-xAI voice effects: the text may carry inline effect tags that the model
-performs, e.g. <soft>…</soft>, <build-intensity>…</build-intensity>,
-[hum-tune]. They are forwarded verbatim — keep them inside --text.
+xAI voices (--model xai), case-insensitive:
+  eve  energetic/upbeat (default)   ara  warm/friendly
+  rex  confident/business           sal  smooth/balanced
+  leo  authoritative/instructional
+  + custom clones: qai conduct clone-voice "name" sample.mp3
+OpenAI voices: alloy, echo, fable, onyx, nova, shimmer.
+ElevenLabs: friendly name or voice id (qai conduct voices).
+
+xAI languages (--language): auto (default), en, ar-EG, ar-SA, ar-AE,
+  bn, zh, fr, de, hi, id, it, ja, ko, pt-BR, pt-PT, ru, es-MX, es-ES,
+  tr, vi. (Spanish is es-ES / es-MX — NOT "es".)
+
+xAI speech tags (inside the text, forwarded verbatim):
+  inline  [pause] [laugh] …            — a one-off expression
+  wrap    <whisper>…</whisper> …       — change delivery of a span
+                (also <soft>, <build-intensity>, pitch/speed/volume tags)
 
 Output:
   Audio file saved to ~/Music/generated/ (path printed to stdout).
 
 Speech → text (the reverse):
-  qai conduct transcribe <audio> [--model xai|gemini|whisper] [--language en]
-    Transcribes mp3/wav/m4a/opus to text on stdout. .opus/.ogg (WhatsApp
-    voice notes) auto-route to grok-stt, which accepts them; whisper-1
-    does not. An explicit --model always wins.
+  qai conduct transcribe <audio> [flags]
+    --model xai|gemini|whisper   provider (default whisper-1; .opus/.ogg
+                                 auto-route to xai grok-stt, which accepts
+                                 them — whisper-1 does not).
+    --language <c>               ISO 639-1; enables number/currency
+                                 formatting (xAI ITN).
+    --keyterm <term>             bias toward a proper noun/product name;
+                                 repeat the flag for several (xAI).
+    --diarize                    label each word with a speaker index (xAI).
+  Formats: wav, mp3, ogg, opus, flac, aac, mp4, m4a, webm. Transcript → stdout.
 
 Examples:
   qai tts "hello world" nova
-  qai tts "hola, ¿qué tal?" --model xai            # xAI "eve" voice
-  qai conduct transcribe ~/Downloads/voice-note.opus   # → grok-stt`
+  qai tts "Hola, ¿qué tal?" --model xai --language es-ES --voice ara
+  qai tts "So I walked in [pause] and <whisper>there it was.</whisper>" --model xai
+  qai conduct transcribe ~/Downloads/voice-note.opus           # → grok-stt
+  qai conduct transcribe meeting.mp3 --model xai --diarize --keyterm "Dinahosting"`
 
 const helpMusic = `qai music — generate music
 

@@ -913,6 +913,7 @@ func conductTTS(args []string) {
 	language := ""
 	sampleRate := 0
 	bitRate := 0
+	speed := 0.0
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--voice":
@@ -927,6 +928,8 @@ func conductTTS(args []string) {
 			if i+1 < len(args) { sampleRate = parseIntArg(args[i+1]); i++ }
 		case "--bit-rate":
 			if i+1 < len(args) { bitRate = parseIntArg(args[i+1]); i++ }
+		case "--speed":
+			if i+1 < len(args) { speed = parseFloatArg(args[i+1]); i++ }
 		default:
 			// Bare positional after the text is a voice (qai tts "hi" nova).
 			if !strings.HasPrefix(args[i], "-") && voice == "" { voice = args[i] }
@@ -946,6 +949,7 @@ func conductTTS(args []string) {
 	if language != "" { body["language"] = language }
 	if sampleRate > 0 { body["sample_rate"] = sampleRate }
 	if bitRate > 0 { body["bit_rate"] = bitRate }
+	if speed > 0 { body["speed"] = speed }
 
 	fmt.Fprintf(os.Stderr, "sending request to %v...\n", model)
 	data, err := qaiAPI("POST", "/qai/v1/audio/tts", body)
@@ -995,14 +999,23 @@ func conductTranscribe(args []string) {
 		"audio_base64": base64.StdEncoding.EncodeToString(audioData),
 		"filename":     filepath.Base(path), // extension drives provider MIME detection
 	}
+	var keyterms []string
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
-		case "--language":
+		case "--language", "--lang":
 			if i+1 < len(args) { body["language"] = args[i+1]; i++ }
 		case "--model", "-m":
 			if i+1 < len(args) { model = resolveAudioModel(args[i+1], sttModelAliases); i++ }
+		case "--keyterm":
+			// Repeatable bias term (proper nouns, product names). xAI only.
+			if i+1 < len(args) { keyterms = append(keyterms, args[i+1]); i++ }
+		case "--diarize":
+			// Speaker labels per word (xAI). Bool flag, no value.
+			body["diarize"] = true
 		}
 	}
+	// The gateway takes keyterm as a single newline-separated string.
+	if len(keyterms) > 0 { body["keyterm"] = strings.Join(keyterms, "\n") }
 	body["model"] = model
 
 	fmt.Fprintf(os.Stderr, "sending request to %v...\n", model)

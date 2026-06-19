@@ -837,25 +837,108 @@ func conductVideo(args []string) {
 
 // ── Audio ───────────────────────────────────────────────────────────────────
 
+// ttsModelAliases maps friendly provider names to concrete TTS model
+// ids. The backend selects the provider by model-id prefix, so these let
+// `--model xai` / `grok` reach the (excellent) xAI generator, `gemini`
+// the Vertex TTS, etc., without the user memorising exact ids.
+var ttsModelAliases = map[string]string{
+	"xai": "grok-tts", "grok": "grok-tts", "grok-tts": "grok-tts",
+	"gemini": "gemini-2.5-flash-preview-tts", "flash": "gemini-2.5-flash-preview-tts",
+	"openai": "tts-1", "tts": "tts-1",
+	"eleven": "eleven_multilingual_v2", "elevenlabs": "eleven_multilingual_v2",
+}
+
+// sttModelAliases — same idea for speech-to-text.
+var sttModelAliases = map[string]string{
+	"xai": "grok-stt", "grok": "grok-stt", "grok-stt": "grok-stt",
+	"gemini": "gemini-2.5-flash", "flash": "gemini-2.5-flash",
+	"openai": "whisper-1", "whisper": "whisper-1",
+	"eleven": "scribe_v2", "elevenlabs": "scribe_v2",
+}
+
+// resolveAudioModel applies an alias table, falling through to the raw
+// value so exact ids still work.
+func resolveAudioModel(raw string, aliases map[string]string) string {
+	if id, ok := aliases[strings.ToLower(raw)]; ok {
+		return id
+	}
+	return raw
+}
+
+// defaultTTSVoice returns the provider-appropriate default voice when the
+// user didn't pass one. Each provider needs a voice it actually accepts —
+// Gemini TTS in particular hard-fails (502) without a prebuilt voice
+// name, so we must supply one rather than leaving it empty. ElevenLabs
+// falls through to its own server-side default.
+func defaultTTSVoice(model string) string {
+	switch {
+	case strings.HasPrefix(model, "grok"):
+		return "eve" // xAI's signature voice
+	case strings.HasPrefix(model, "tts-") || strings.HasPrefix(model, "gpt-"):
+		return "alloy" // OpenAI default
+	case strings.HasPrefix(model, "gemini"):
+		return "Kore" // a Gemini prebuilt voice — Gemini TTS 502s with no voice
+	}
+	return ""
+}
+
+// audioExtFor turns the provider-reported format into a clean file
+// extension. Most providers return a simple token (mp3/wav/opus); Gemini
+// returns a MIME-ish param string like "L16;codec=pcm;rate=24000" which
+// must NOT be used verbatim (it produces a filename full of semicolons).
+func audioExtFor(format string) string {
+	f := strings.ToLower(strings.TrimSpace(format))
+	switch {
+	case f == "":
+		return ".mp3"
+	case strings.HasPrefix(f, "l16") || strings.Contains(f, "pcm"):
+		return ".pcm"
+	case f == "mp3" || f == "wav" || f == "opus" || f == "aac" || f == "flac":
+		return "." + f
+	default:
+		return ".mp3"
+	}
+}
+
 func conductTTS(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: qai conduct tts \"text\" [--voice alloy]")
+		fmt.Fprintln(os.Stderr, "usage: qai conduct tts \"text\" [voice] [--model xai|gemini|openai] [--voice eve] [--format mp3]")
 		os.Exit(1)
 	}
 
-	body := map[string]any{"text": args[0], "voice": "alloy", "model": "tts-1"}
+	text := args[0]
+	model := "tts-1"
+	voice := ""
+	format := ""
 	for i := 1; i < len(args); i++ {
-		if args[i] == "--voice" && i+1 < len(args) { body["voice"] = args[i+1]; i++ }
+		switch args[i] {
+		case "--voice":
+			if i+1 < len(args) { voice = args[i+1]; i++ }
+		case "--model", "-m":
+			if i+1 < len(args) { model = resolveAudioModel(args[i+1], ttsModelAliases); i++ }
+		case "--format":
+			if i+1 < len(args) { format = args[i+1]; i++ }
+		default:
+			// Bare positional after the text is a voice (qai tts "hi" nova).
+			if !strings.HasPrefix(args[i], "-") && voice == "" { voice = args[i] }
+		}
 	}
+	if voice == "" { voice = defaultTTSVoice(model) }
 
-	fmt.Fprintf(os.Stderr, "sending request to %v...\n", body["model"])
+	body := map[string]any{"text": text, "model": model}
+	if voice != "" { body["voice"] = voice }
+	if format != "" { body["format"] = format }
+
+	fmt.Fprintf(os.Stderr, "sending request to %v...\n", model)
 	data, err := qaiAPI("POST", "/qai/v1/audio/tts", body)
 	if err != nil { dieAPI(err) }
 
 	var resp map[string]any
 	if json.Unmarshal(data, &resp) == nil {
 		if b64, ok := resp["audio_base64"].(string); ok {
-			path := saveBase64(b64, "Music/generated", ".mp3")
+			ext := ".mp3"
+			if f, ok := resp["format"].(string); ok { ext = audioExtFor(f) }
+			path := saveBase64(b64, "Music/generated", ext)
 			if path != "" { fmt.Println(path) }
 			return
 		}
@@ -863,28 +946,48 @@ func conductTTS(args []string) {
 	printJSON(data)
 }
 
+// sttDefaultModelFor picks a sensible default STT model from the file
+// extension. OpenAI whisper-1 rejects Opus (the WhatsApp voice-note
+// codec), so `.opus`/`.ogg` route to xAI's grok-stt which accepts them;
+// everything else defaults to whisper-1. An explicit --model always wins.
+func sttDefaultModelFor(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".opus", ".ogg", ".oga":
+		return "grok-stt"
+	}
+	return "whisper-1"
+}
+
 func conductTranscribe(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: qai conduct transcribe <audio.mp3> [--language en]")
+		fmt.Fprintln(os.Stderr, "usage: qai conduct transcribe <audio> [--model xai|gemini|whisper] [--language en]")
 		os.Exit(1)
 	}
 
-	audioData, err := os.ReadFile(args[0])
+	path := args[0]
+	audioData, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "qai conduct transcribe: cannot read audio file %s: %v\n", args[0], err)
-		fmt.Fprintln(os.Stderr, "  → fix: pass a path to a real audio file (mp3, wav, m4a) as the first argument")
+		fmt.Fprintf(os.Stderr, "qai conduct transcribe: cannot read audio file %s: %v\n", path, err)
+		fmt.Fprintln(os.Stderr, "  → fix: pass a path to a real audio file (mp3, wav, m4a, opus) as the first argument")
 		os.Exit(1)
 	}
 
+	model := sttDefaultModelFor(path)
 	body := map[string]any{
 		"audio_base64": base64.StdEncoding.EncodeToString(audioData),
-		"model":        "whisper-1",
+		"filename":     filepath.Base(path), // extension drives provider MIME detection
 	}
 	for i := 1; i < len(args); i++ {
-		if args[i] == "--language" && i+1 < len(args) { body["language"] = args[i+1]; i++ }
+		switch args[i] {
+		case "--language":
+			if i+1 < len(args) { body["language"] = args[i+1]; i++ }
+		case "--model", "-m":
+			if i+1 < len(args) { model = resolveAudioModel(args[i+1], sttModelAliases); i++ }
+		}
 	}
+	body["model"] = model
 
-	fmt.Fprintf(os.Stderr, "sending request to %v...\n", body["model"])
+	fmt.Fprintf(os.Stderr, "sending request to %v...\n", model)
 	data, err := qaiAPI("POST", "/qai/v1/audio/stt", body)
 	if err != nil { dieAPI(err) }
 

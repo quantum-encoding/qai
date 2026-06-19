@@ -938,19 +938,30 @@ const helpTTS = `qai tts — text to speech
 Usage:
   qai tts "text" [voice] [flags]
 
-Built-in voices (OpenAI):
-  alloy, echo, fable, onyx, nova, shimmer
-
 Flags:
-  --model <id>    Override TTS model id
-  --voice <id>    Cloned voice id (see: qai conduct clone-voice)
+  --model <id>    TTS model or provider alias (default: tts-1)
+                  Aliases: xai|grok → grok-tts (great quality, voice "eve")
+                           gemini    → gemini-2.5-flash-preview-tts
+                           openai    → tts-1
+                           eleven    → eleven_multilingual_v2
+  --voice <id>    Voice. OpenAI: alloy, echo, fable, onyx, nova, shimmer.
+                  xAI default: eve. ElevenLabs: friendly name or voice id
+                  (see: qai conduct clone-voice / qai conduct voices).
+  --format <fmt>  mp3 (default), wav, opus, aac, flac, pcm.
 
 Output:
-  Audio file saved to ~/Pictures/generated/ (path printed to stdout).
+  Audio file saved to ~/Music/generated/ (path printed to stdout).
+
+Speech → text (the reverse):
+  qai conduct transcribe <audio> [--model xai|gemini|whisper] [--language en]
+    Transcribes mp3/wav/m4a/opus to text on stdout. .opus/.ogg (WhatsApp
+    voice notes) auto-route to grok-stt, which accepts them; whisper-1
+    does not. An explicit --model always wins.
 
 Examples:
   qai tts "hello world" nova
-  qai tts "narration text" --voice <cloned-id>`
+  qai tts "hola, ¿qué tal?" --model xai            # xAI "eve" voice
+  qai conduct transcribe ~/Downloads/voice-note.opus   # → grok-stt`
 
 const helpMusic = `qai music — generate music
 

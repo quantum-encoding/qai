@@ -1024,12 +1024,68 @@ func conductTranscribe(args []string) {
 
 	var resp map[string]any
 	if json.Unmarshal(data, &resp) == nil {
+		// With diarization, render the transcript grouped by speaker turn
+		// using the word-level `speaker` indices. Falls back to plain text
+		// when no per-word data came back (single speaker, or provider
+		// without diarization).
+		if words, ok := resp["words"].([]any); ok && len(words) > 0 {
+			if out := renderDiarizedTranscript(words); out != "" {
+				fmt.Println(out)
+				return
+			}
+		}
 		if text, ok := resp["text"].(string); ok {
 			fmt.Println(text)
 			return
 		}
 	}
 	printJSON(data)
+}
+
+// renderDiarizedTranscript groups word segments into speaker turns:
+// consecutive words sharing a speaker index become one line prefixed
+// "Speaker N:". Returns "" if the words carry no distinct speaker info
+// (all speaker 0), so the caller can fall back to plain text.
+func renderDiarizedTranscript(words []any) string {
+	type turn struct {
+		speaker int
+		text    string
+	}
+	var turns []turn
+	multiSpeaker := false
+	for _, w := range words {
+		m, ok := w.(map[string]any)
+		if !ok {
+			continue
+		}
+		txt, _ := m["text"].(string)
+		if txt == "" {
+			continue
+		}
+		spk := 0
+		if f, ok := m["speaker"].(float64); ok {
+			spk = int(f)
+		}
+		if spk != 0 {
+			multiSpeaker = true
+		}
+		if n := len(turns); n > 0 && turns[n-1].speaker == spk {
+			turns[n-1].text += " " + txt
+		} else {
+			turns = append(turns, turn{speaker: spk, text: txt})
+		}
+	}
+	if !multiSpeaker {
+		return "" // single speaker — plain text is cleaner
+	}
+	var sb strings.Builder
+	for i, t := range turns {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		fmt.Fprintf(&sb, "Speaker %d: %s", t.speaker, strings.TrimSpace(t.text))
+	}
+	return sb.String()
 }
 
 func conductMusic(args []string) {

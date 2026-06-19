@@ -947,7 +947,17 @@ Flags:
   --voice <id>    Voice. OpenAI: alloy, echo, fable, onyx, nova, shimmer.
                   xAI default: eve. ElevenLabs: friendly name or voice id
                   (see: qai conduct clone-voice / qai conduct voices).
+  --language <c>  ISO 639-1 code (es, fr, ca, …). xAI/grok: REQUIRED for
+                  natural non-English speech — without it the text is
+                  spoken with English pronunciation and sounds robotic.
   --format <fmt>  mp3 (default), wav, opus, aac, flac, pcm.
+  --sample-rate <hz>  Output sample rate (xAI). Default 44100 for grok
+                      (CD quality), else provider default.
+  --bit-rate <bps>    Output bit rate (xAI), e.g. 128000.
+
+xAI voice effects: the text may carry inline effect tags that the model
+performs, e.g. <soft>…</soft>, <build-intensity>…</build-intensity>,
+[hum-tune]. They are forwarded verbatim — keep them inside --text.
 
 Output:
   Audio file saved to ~/Music/generated/ (path printed to stdout).

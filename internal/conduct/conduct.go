@@ -910,6 +910,9 @@ func conductTTS(args []string) {
 	model := "tts-1"
 	voice := ""
 	format := ""
+	language := ""
+	sampleRate := 0
+	bitRate := 0
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--voice":
@@ -918,16 +921,31 @@ func conductTTS(args []string) {
 			if i+1 < len(args) { model = resolveAudioModel(args[i+1], ttsModelAliases); i++ }
 		case "--format":
 			if i+1 < len(args) { format = args[i+1]; i++ }
+		case "--language", "--lang":
+			if i+1 < len(args) { language = args[i+1]; i++ }
+		case "--sample-rate":
+			if i+1 < len(args) { sampleRate = parseIntArg(args[i+1]); i++ }
+		case "--bit-rate":
+			if i+1 < len(args) { bitRate = parseIntArg(args[i+1]); i++ }
 		default:
 			// Bare positional after the text is a voice (qai tts "hi" nova).
 			if !strings.HasPrefix(args[i], "-") && voice == "" { voice = args[i] }
 		}
 	}
 	if voice == "" { voice = defaultTTSVoice(model) }
+	// xAI sounds robotic when it synthesises non-English text under the
+	// default "en" pronunciation. When the caller targets grok-tts and
+	// gives no language, lift the quality with CD-rate audio so at least
+	// the codec isn't the bottleneck — but language is the big lever, so
+	// surface it via --language.
+	if sampleRate == 0 && strings.HasPrefix(model, "grok") { sampleRate = 44100 }
 
 	body := map[string]any{"text": text, "model": model}
 	if voice != "" { body["voice"] = voice }
 	if format != "" { body["format"] = format }
+	if language != "" { body["language"] = language }
+	if sampleRate > 0 { body["sample_rate"] = sampleRate }
+	if bitRate > 0 { body["bit_rate"] = bitRate }
 
 	fmt.Fprintf(os.Stderr, "sending request to %v...\n", model)
 	data, err := qaiAPI("POST", "/qai/v1/audio/tts", body)

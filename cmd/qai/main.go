@@ -876,7 +876,7 @@ Flags (provider-neutral — translated per model):
                         Gemini: native field. OpenAI: maps to nearest size enum.
                         Grok: dropped (model has no aspect field).
   --size <value>        Image size — meaning depends on the model:
-                          Gemini Pro:  1K | 2K           (resolution tier)
+                          Gemini Pro:  1K | 2K | 4K      (resolution tier)
                           Gemini Flash: (no resolution; flag dropped)
                           OpenAI:      1024x1024 | 1024x1536 | 1536x1024 | auto
                           Pixel input on Gemini Pro snaps to nearest tier;
@@ -921,9 +921,9 @@ Providers:
 
 Flags:
   --model <id>          Override model id (xai|grok → grok-imagine-video)
-  --duration <sec>      Duration in seconds (default 8; grok 1–10)
-  --aspect <ratio>      Aspect ratio, e.g. 16:9, 9:16, 1:1 (grok)
-  --resolution <r>      480p or 720p (grok)
+  --duration <sec>      Duration in seconds (default 8; grok 1–15, veo 4/6/8)
+  --aspect <ratio>      Aspect ratio, e.g. 16:9, 9:16, 1:1, 4:3, 3:4 (grok: 7 ratios)
+  --resolution <r>      480p | 720p | 1080p (grok); veo: 720p | 1080p | 4k
   --image <path>        Image-to-video: animate a first frame (grok).
                         PNG/JPEG encoded and sent as the seed frame.
 

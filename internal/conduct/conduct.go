@@ -795,7 +795,7 @@ func conductImageEdit(args []string) {
 
 func conductVideo(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: qai conduct video \"prompt\" [--model M] [--duration 1-10] [--aspect 16:9] [--resolution 480p|720p] [--image first-frame.png]")
+		fmt.Fprintln(os.Stderr, "usage: qai conduct video \"prompt\" [--model M] [--duration 1-15] [--aspect 16:9] [--resolution 480p|720p|1080p] [--image first-frame.png]")
 		os.Exit(1)
 	}
 

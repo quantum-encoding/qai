@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/quantum-encoding/qai-cli/internal/config"
+	"github.com/quantum-encoding/qai-cli/internal/joplin"
 	"github.com/quantum-encoding/qai-cli/internal/embedding"
 	"github.com/quantum-encoding/qai-cli/internal/strutil"
 )
@@ -28,10 +29,10 @@ var Cfg *config.Config
 const braveBaseURL = "https://api.search.brave.com"
 
 func BraveSearch(query string, count int, freshness string) {
-	key := os.Getenv("BRAVE_SEARCH_API_KEY")
+	key := config.Secret("BRAVE_SEARCH_API_KEY")
 	if key == "" {
-		fmt.Fprintln(os.Stderr, "qai search: BRAVE_SEARCH_API_KEY not set")
-		fmt.Fprintln(os.Stderr, "  → fix: export BRAVE_SEARCH_API_KEY=<key>  (get one at https://api.search.brave.com/)")
+		fmt.Fprintln(os.Stderr, "qai search: no BRAVE_SEARCH_API_KEY (env or secrets vault)")
+		fmt.Fprintln(os.Stderr, "  → fix: secrets set BRAVE_SEARCH_API_KEY  (get one at https://api.search.brave.com/)")
 		os.Exit(1)
 	}
 
@@ -81,7 +82,7 @@ func BraveSearch(query string, count int, freshness string) {
 }
 
 func BraveSearchJSON(query string, count int) []byte {
-	key := os.Getenv("BRAVE_SEARCH_API_KEY")
+	key := config.Secret("BRAVE_SEARCH_API_KEY")
 	if key == "" {
 		return nil
 	}
@@ -118,13 +119,13 @@ func BraveSearchJSON(query string, count int) []byte {
 // BRAVE_SEARCH_API_KEY when unset (Brave currently provisions a
 // single key by default).
 func BraveAsk(question string) {
-	key := os.Getenv("BRAVE_ANSWERS_API_KEY")
+	key := config.Secret("BRAVE_ANSWERS_API_KEY")
 	if key == "" {
-		key = os.Getenv("BRAVE_SEARCH_API_KEY")
+		key = config.Secret("BRAVE_SEARCH_API_KEY")
 	}
 	if key == "" {
-		fmt.Fprintln(os.Stderr, "qai ask: BRAVE_SEARCH_API_KEY not set (or BRAVE_ANSWERS_API_KEY for a separate Answers subscription)")
-		fmt.Fprintln(os.Stderr, "  → fix: export BRAVE_SEARCH_API_KEY=<key>  (get one at https://api.search.brave.com/)")
+		fmt.Fprintln(os.Stderr, "qai ask: no BRAVE_SEARCH_API_KEY (env or secrets vault; BRAVE_ANSWERS_API_KEY for a separate Answers subscription)")
+		fmt.Fprintln(os.Stderr, "  → fix: secrets set BRAVE_SEARCH_API_KEY  (get one at https://api.search.brave.com/)")
 		os.Exit(1)
 	}
 
@@ -206,10 +207,10 @@ func BraveAsk(question string) {
 // llm/context endpoint is purpose-built for this use case and is
 // not affected by the Summarizer deprecation.
 func BraveContext(query string) {
-	key := os.Getenv("BRAVE_SEARCH_API_KEY")
+	key := config.Secret("BRAVE_SEARCH_API_KEY")
 	if key == "" {
-		fmt.Fprintln(os.Stderr, "qai context: BRAVE_SEARCH_API_KEY not set")
-		fmt.Fprintln(os.Stderr, "  → fix: export BRAVE_SEARCH_API_KEY=<key>  (get one at https://api.search.brave.com/)")
+		fmt.Fprintln(os.Stderr, "qai context: no BRAVE_SEARCH_API_KEY (env or secrets vault)")
+		fmt.Fprintln(os.Stderr, "  → fix: secrets set BRAVE_SEARCH_API_KEY  (get one at https://api.search.brave.com/)")
 		os.Exit(1)
 	}
 
@@ -247,14 +248,17 @@ func BraveContext(query string) {
 // ─── Joplin Search (replaces node joplin-search.mjs) ─────────────────────
 
 func JoplinSearch(query string, limit int) {
-	token := os.Getenv("JOPLIN_TOKEN")
+	token, _ := joplin.LoadDefaultToken()
+	if token == "" {
+		token = config.Secret("JOPLIN_TOKEN")
+	}
 	joplinURL := os.Getenv("JOPLIN_URL")
 	if joplinURL == "" {
 		joplinURL = "http://localhost:41184"
 	}
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "qai search --joplin: JOPLIN_TOKEN not set")
-		fmt.Fprintln(os.Stderr, "  → fix: enable the Joplin Web Clipper (Tools → Options → Web Clipper) and export JOPLIN_TOKEN=<token>")
+		fmt.Fprintln(os.Stderr, "qai search --joplin: no JOPLIN_TOKEN (env, Joplin desktop settings, or secrets vault)")
+		fmt.Fprintln(os.Stderr, "  → fix: enable the Joplin Web Clipper (Tools → Options → Web Clipper)")
 		os.Exit(1)
 	}
 	if limit <= 0 {

@@ -5,8 +5,11 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -211,9 +214,57 @@ func (c *Config) CloudConn() SurrealConn {
 
 func (c *Config) EmbedAPIKey() string {
 	if c.Embeddings.APIKey != "" { return c.Embeddings.APIKey }
-	return c.API.APIKey
+	return c.APIKeyResolved()
 }
 
 func (c *Config) GetDBPort() int    { return c.Surreal.LocalPort }
 func (c *Config) GetDBUser() string { return c.Surreal.LocalUser }
 func (c *Config) GetDBPass() string { return c.Surreal.LocalPass }
+
+// ─── Biometric vault fallback ────────────────────────────────────────────
+//
+// Secrets resolve env-first (an interactive export or a `secrets exec`
+// injection wins), then fall back to the biometric secrets vault
+// (~/.local/bin/secrets). Lookups are cached per process, and commands that
+// never need a secret never touch the vault, so the Touch ID prompt only
+// appears when a vault read is genuinely required.
+
+var vaultCache sync.Map // secret name → value ("" = confirmed absent)
+
+// Secret returns the named secret from the environment or the vault ("" if
+// neither has it).
+func Secret(name string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	if v, ok := vaultCache.Load(name); ok {
+		return v.(string)
+	}
+	v := ""
+	if out, err := exec.Command(vaultBin(), "get", name).Output(); err == nil {
+		v = strings.TrimSpace(string(out))
+	}
+	vaultCache.Store(name, v)
+	return v
+}
+
+// VaultHas reports whether the vault holds the named secret WITHOUT
+// decrypting it (`secrets has` reads only the plaintext name index, no
+// Touch ID) — for diagnostics that ask "is it available" without paying
+// for a read.
+func VaultHas(name string) bool {
+	return exec.Command(vaultBin(), "has", name).Run() == nil
+}
+
+func vaultBin() string {
+	return filepath.Join(HomeDir(), ".local", "bin", "secrets")
+}
+
+// APIKeyResolved returns the QAI broker key: config file / QAI_API_KEY env
+// first (merged in overlayEnvVars), then the vault entry QAI_API_KEY.
+func (c *Config) APIKeyResolved() string {
+	if c.API.APIKey != "" {
+		return c.API.APIKey
+	}
+	return Secret("QAI_API_KEY")
+}

@@ -23,7 +23,7 @@ func Dispatch(cfg *config.Config, texts []string) ([][]float64, error) {
 	case "openai":
 		return OpenAI(cfg.EmbedAPIKey(), cfg.Embeddings.Model, cfg.Embeddings.Dimensions, texts)
 	case "qai":
-		return QAI(cfg.API.APIKey, cfg.API.BaseURL, cfg.Embeddings.Model, cfg.Embeddings.Dimensions, texts)
+		return QAI(cfg.APIKeyResolved(), cfg.API.BaseURL, cfg.Embeddings.Model, cfg.Embeddings.Dimensions, texts)
 	default:
 		return nil, fmt.Errorf("unknown embedding provider: %s (run qai init)", cfg.Embeddings.Provider)
 	}

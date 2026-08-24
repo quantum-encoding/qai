@@ -25,7 +25,7 @@ var Cfg *config.Config
 // qaiBase() and qaiKey() are read from cfg (set in main).
 // These accessors keep the rest of conduct.go unchanged.
 func qaiBase() string { return Cfg.API.BaseURL }
-func qaiKey() string  { return Cfg.API.APIKey }
+func qaiKey() string  { return Cfg.APIKeyResolved() }
 
 func CmdConduct(args []string) {
 	if len(args) == 0 {

@@ -395,7 +395,7 @@ Profiles are loaded from:
 	}
 
 	// Real run.
-	apiKey := Cfg.API.APIKey
+	apiKey := Cfg.APIKeyResolved()
 	if apiKey == "" {
 		fmt.Fprintln(os.Stderr, "\nqai audit: QAI_API_KEY not configured")
 		fmt.Fprintln(os.Stderr, "  -> fix: run `qai init`, or export QAI_API_KEY=<key> (get one at https://quantumencoding.ai)")

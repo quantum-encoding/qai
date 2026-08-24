@@ -118,12 +118,16 @@ func printResult(r result) {
 // ─── checks ────────────────────────────────────────────────────────────────
 
 func checkBroker() result {
-	if Cfg == nil || Cfg.API.APIKey == "" {
+	key := ""
+	if Cfg != nil {
+		key = Cfg.APIKeyResolved()
+	}
+	if key == "" {
 		return result{
 			name:   "broker",
 			state:  statusMissingOptional,
-			detail: "QAI_API_KEY not set (image/video/tts/audit/conduct disabled)",
-			fix:    "export QAI_API_KEY=<key>  (sign up at https://quantumencoding.ai)",
+			detail: "no QAI_API_KEY in env or secrets vault (image/video/tts/audit/conduct disabled)",
+			fix:    "secrets set QAI_API_KEY  (sign up at https://quantumencoding.ai)",
 		}
 	}
 	base := Cfg.API.BaseURL
@@ -136,7 +140,7 @@ func checkBroker() result {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/qai/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer "+Cfg.API.APIKey)
+	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return result{
@@ -223,18 +227,20 @@ func checkGcloud() result {
 }
 
 func checkBrave() result {
-	if os.Getenv("BRAVE_SEARCH_API_KEY") == "" {
+	// `secrets has` reads only the vault's name index — no Touch ID — so this
+	// diagnostic never triggers a biometric prompt.
+	if os.Getenv("BRAVE_SEARCH_API_KEY") == "" && !config.VaultHas("BRAVE_SEARCH_API_KEY") {
 		return result{
 			name:   "brave",
 			state:  statusMissingOptional,
-			detail: "BRAVE_SEARCH_API_KEY not set (qai web/ask/context disabled)",
-			fix:    "export BRAVE_SEARCH_API_KEY=<key>  (free tier at https://api.search.brave.com/)",
+			detail: "no BRAVE_SEARCH_API_KEY in env or secrets vault (qai web/ask/context disabled)",
+			fix:    "secrets set BRAVE_SEARCH_API_KEY  (free tier at https://api.search.brave.com/)",
 		}
 	}
 	return result{
 		name:   "brave",
 		state:  statusOK,
-		detail: "BRAVE_SEARCH_API_KEY set",
+		detail: "BRAVE_SEARCH_API_KEY available (env or secrets vault)",
 	}
 }
 

@@ -800,7 +800,7 @@ func conductVideo(args []string) {
 	}
 
 	body := map[string]any{
-		"job_type": "video/generate",
+		"type": "video/generate",
 		"params": map[string]any{
 			"prompt":           args[0],
 			"model":            "grok-imagine-video",

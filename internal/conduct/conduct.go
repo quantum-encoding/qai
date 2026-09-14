@@ -862,8 +862,8 @@ func conductVideo(args []string) {
 // the Vertex TTS, etc., without the user memorising exact ids.
 var ttsModelAliases = map[string]string{
 	"xai": "grok-tts", "grok": "grok-tts", "grok-tts": "grok-tts",
-	"gemini": "gemini-2.5-flash-preview-tts", "flash": "gemini-2.5-flash-preview-tts",
-	"openai": "tts-1", "tts": "tts-1",
+	"gemini": "gemini-3.1-flash-tts-preview", "flash": "gemini-3.1-flash-tts-preview",
+	"openai": "openai-tts-1", "tts": "openai-tts-1",
 	"eleven": "eleven_multilingual_v2", "elevenlabs": "eleven_multilingual_v2",
 }
 
@@ -893,7 +893,7 @@ func defaultTTSVoice(model string) string {
 	switch {
 	case strings.HasPrefix(model, "grok"):
 		return "eve" // xAI's signature voice
-	case strings.HasPrefix(model, "tts-") || strings.HasPrefix(model, "gpt-"):
+	case strings.HasPrefix(model, "openai-tts") || strings.HasPrefix(model, "gpt-"):
 		return "alloy" // OpenAI default
 	case strings.HasPrefix(model, "gemini"):
 		return "Kore" // a Gemini prebuilt voice — Gemini TTS 502s with no voice
@@ -926,7 +926,7 @@ func conductTTS(args []string) {
 	}
 
 	text := args[0]
-	model := "tts-1"
+	model := "gemini-3.1-flash-tts-preview"
 	voice := ""
 	format := ""
 	language := ""

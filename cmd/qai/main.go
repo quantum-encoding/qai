@@ -944,11 +944,12 @@ Usage:
   qai tts "text" [voice] [flags]
 
 Flags:
-  --model <id>    TTS model or provider alias (default: tts-1)
-                  Aliases: xai|grok → grok-tts (best quality)
-                           gemini    → gemini-2.5-flash-preview-tts
-                           openai    → tts-1
-                           eleven    → eleven_multilingual_v2
+  --model <id>    TTS model or provider alias
+                  (default: gemini-3.1-flash-tts-preview)
+                  Aliases: gemini|flash → gemini-3.1-flash-tts-preview
+                           xai|grok     → grok-tts
+                           openai       → openai-tts-1
+                           eleven       → eleven_multilingual_v2
   --voice <id>    Voice (see per-provider list below).
   --language <c>  Language code. xAI: BCP-47 or "auto" (default). Set it
                   for natural non-English speech — an English default

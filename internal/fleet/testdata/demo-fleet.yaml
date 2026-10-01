@@ -15,7 +15,7 @@ defaults:
 
 panes:
   - name: count-go
-    cwd: /Users/director/work/qai/internal/fleet
+    cwd: /Users/director/work/go_programs/qai/internal/fleet
     agent:
       kind: fresh
       cmd: claude
@@ -29,7 +29,7 @@ panes:
       where N is the count. Then exit.
 
   - name: count-tests
-    cwd: /Users/director/work/qai/internal/fleet
+    cwd: /Users/director/work/go_programs/qai/internal/fleet
     agent:
       kind: fresh
       cmd: claude
@@ -43,7 +43,7 @@ panes:
       Then exit.
 
   - name: lines-readme
-    cwd: /Users/director/work/qai
+    cwd: /Users/director/work/go_programs/qai
     agent:
       kind: fresh
       cmd: claude

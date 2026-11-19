@@ -59,7 +59,7 @@ type TranslateRequest struct {
 	KeyPath   string   // dot-path; included for prompt context only
 	AppName   string   // optional app name for tone context (e.g. "Kitchen Share")
 	Targets   []string // locale codes (e.g. ["es", "fr", "de"])
-	Model     string   // chat model id; default claude-sonnet-4-6
+	Model     string   // chat model id; default claude-sonnet-5-5
 }
 
 type TranslateResult struct {
@@ -91,7 +91,7 @@ func Translate(req TranslateRequest) (*TranslateResult, error) {
 	}
 	model := req.Model
 	if model == "" {
-		model = "claude-sonnet-4-6"
+		model = "claude-sonnet-5-5"
 	}
 
 	// Build the prompt. We're explicit about:

@@ -49,8 +49,8 @@ Flags:
   -h, --help                This help
 
 Examples:
-  qai chat --model gemini-3-pro "explain this error"
-  qai compile ./src | qai chat --template review --model claude-opus-4-6
+  qai chat --model gemini-4-carbon "explain this error"
+  qai compile ./src | qai chat --template review --model claude-opus-5-5
   cat diff.patch | qai chat -t review`
 
 // CmdChat is the entry point dispatched from cmd/qai/main.go.
@@ -152,13 +152,13 @@ func CmdChat(args []string) {
 	fmt.Println(text)
 }
 
-// defaultModel returns the fallback chat model id. APIConfig doesn't
-// carry a default-chat-model field today (only BaseURL + APIKey), so we
-// hardcode a known-good Gemini 3 Pro id. If/when a config knob lands,
-// swap this for the cfg lookup — keeping it in one function makes that
-// a one-line change.
+// defaultModel returns the fallback chat model id. APIConfig carries no
+// default-chat-model field (only BaseURL + APIKey), so the id is fixed
+// here. The gateway refuses a deprecated id with 400 MODEL_DEPRECATED,
+// so this and the alias targets below must name models it still serves
+// (see /qai/v1/models).
 func defaultModel() string {
-	return "gemini-3.1-pro-preview"
+	return "gemini-4-carbon"
 }
 
 // chatAliases maps human-friendly model shortnames to canonical broker
@@ -167,14 +167,14 @@ func defaultModel() string {
 // duplicating the full model registry. Use the exact id if you want
 // something else (see `qai conduct models`).
 var chatAliases = map[string]string{
-	"gemini":       "gemini-3.1-pro-preview",
-	"gemini-pro":   "gemini-3.1-pro-preview",
-	"gemini-flash": "gemini-3.5-flash",
-	"claude":       "claude-opus-4-6",
-	"claude-opus":  "claude-opus-4-6",
+	"gemini":       "gemini-4-carbon",
+	"gemini-pro":   "gemini-4-carbon",
+	"gemini-flash": "gemini-4-hydrogen",
+	"claude":       "claude-opus-5-5",
+	"claude-opus":  "claude-opus-5-5",
 	"grok":         "grok-4-1-fast-non-reasoning",
-	"gpt":          "gpt-5.2",
-	"gpt-5":        "gpt-5.2",
+	"gpt":          "gpt-6-astra",
+	"gpt-5":        "gpt-6-astra",
 }
 
 // resolveModel applies aliases (case-insensitive). Anything not in the

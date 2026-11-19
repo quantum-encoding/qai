@@ -470,7 +470,7 @@ Flags:
                          col 3) overrides.
 
   --model, -m <id>       passed through to every job (default:
-                         gemini-3.1-flash-lite)
+                         gemini-4-hydrogen)
   --template, -t <name>  named system-instruction profile
                          (default: media-narrate)
   --system "..."         explicit system prompt

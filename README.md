@@ -89,7 +89,7 @@ qai audit <path> --profile code-review       # code quality review
 qai audit <path> --profile security-blueteam # defensive security review
 qai audit <path> --profile documentation     # generate documentation
 qai audit <path> --dry-run            # show files without calling LLM
-qai audit <path> -c 10 -m gemini-3.1-pro-preview  # concurrency + model
+qai audit <path> -c 10 -m gemini-4-carbon  # concurrency + model
 ```
 
 ### Compiler-Accurate Parsers

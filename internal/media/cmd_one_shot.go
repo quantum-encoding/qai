@@ -49,10 +49,10 @@ func cmdOneShot(args []string) {
 		docMode = true
 	}
 
-	// Default model: document-vision modes want the strong 3.5 Flash;
-	// everything else keeps the cheap flash-lite default.
+	// Default model: document-vision modes use gemini-4-hydrogen even if
+	// the general media default (defaultModel) names a different model.
 	if model == "" && docMode {
-		model = "gemini-3.5-flash"
+		model = "gemini-4-hydrogen"
 	}
 	model = resolveModel(model)
 

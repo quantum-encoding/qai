@@ -11,11 +11,13 @@ func TestResolveModel(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"", "gemini-3.1-flash-lite"},
-		{"gemini", "gemini-3.1-flash-lite"},
-		{"flash-lite", "gemini-3.1-flash-lite"},
-		{"FLASH", "gemini-3.1-flash-lite"},
-		{"gemini-pro", "gemini-3.1-pro-preview"},
+		{"", "gemini-4-hydrogen"},
+		{"gemini", "gemini-4-hydrogen"},
+		{"flash-lite", "gemini-4-hydrogen"},
+		{"FLASH", "gemini-4-hydrogen"},
+		{"gemini-pro", "gemini-4-carbon"},
+		{"gemini-flash-pro", "gemini-4-hydrogen"},
+		{"3-5-flash", "gemini-4-hydrogen"},
 		// unknown alias passes through verbatim so the broker can
 		// reject with a useful "model not available"
 		{"some-future-model", "some-future-model"},

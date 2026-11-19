@@ -7,7 +7,7 @@
 // Usage:
 //
 //	qai audit <path> [options]
-//	qai audit . --profile security-redteam --model gemini-3.1-pro-preview
+//	qai audit . --profile security-redteam --model gemini-4-carbon
 //	qai audit . --dry-run                  # show what would be sent
 //	qai audit . -c 10 --max-tokens 60000   # 10 workers, 60K output tokens
 
@@ -244,7 +244,7 @@ LLM code audit — parallel per-file analysis with configurable profiles.
 Options:
   --profile <name>     Audit profile:
 %s  --profile-file <path>  Load profile from external YAML file
-  --model <model>      LLM model (default: gemini-3.1-pro-preview)
+  --model <model>      LLM model (default: gemini-4-carbon)
   --max-tokens <n>     Max output tokens per file (default: 60000)
   -c <n>               Concurrency / parallel workers (default: 10)
   --dry-run            Show what files would be analyzed without calling the LLM
@@ -261,7 +261,7 @@ Profiles are loaded from:
 
 	dir := args[0]
 	profileName := "security-redteam"
-	model := "gemini-3.1-pro-preview"
+	model := "gemini-4-carbon"
 	maxTokens := 60000
 	concurrency := 10
 	dryRun := false

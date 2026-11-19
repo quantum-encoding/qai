@@ -142,9 +142,8 @@ func joinPrompt(args []string) string {
 	return strings.TrimSpace(strings.Join(args, " "))
 }
 
-// resolveModel applies the same alias map qai chat uses, plus the
-// media-specific default (gemini-3.1-flash-lite — the cheapest 3.x
-// flash variant). Centralised here so every media subcommand picks the
+// resolveModel applies the media alias table and the media default
+// (defaultModel). Centralised here so every media subcommand picks the
 // same default and accepts the same shorthand.
 func resolveModel(raw string) string {
 	if raw == "" {
@@ -156,7 +155,7 @@ func resolveModel(raw string) string {
 	return raw
 }
 
-const defaultModel = "gemini-3.1-flash-lite"
+const defaultModel = "gemini-4-hydrogen"
 
 // modelAliases is the small media-specific lookup table. We deliberately
 // only expose the Gemini family — the server-side caches endpoint
@@ -167,17 +166,18 @@ var modelAliases = map[string]string{
 	"flash":            defaultModel,
 	"flash-lite":       defaultModel,
 	"gemini-lite":      defaultModel,
-	"gemini-flash":     "gemini-3.5-flash",
-	"gemini-flash-pro": "gemini-3-flash-preview",
-	"gemini-pro":       "gemini-3.1-pro-preview",
-	// 3.5 Flash shorthands — the strong document-vision model behind
-	// --transcribe/--translate. Both the dotted and dashed forms resolve
-	// so `-m 3-5-flash` (shell-friendly, no dot) and `-m 3.5-flash` work.
-	"3.5-flash":   "gemini-3.5-flash",
-	"3-5-flash":   "gemini-3.5-flash",
-	"flash-3.5":   "gemini-3.5-flash",
-	"flash35":     "gemini-3.5-flash",
-	"gemini-3.5":  "gemini-3.5-flash",
+	"gemini-flash":     "gemini-4-hydrogen",
+	"gemini-flash-pro": "gemini-4-hydrogen",
+	"gemini-pro":       "gemini-4-carbon",
+	// 3.5 Flash shorthands resolve to gemini-4-hydrogen, the gateway's
+	// replacement for the deprecated gemini-3.5-flash, so scripts that
+	// pass them keep working. Dotted and dashed forms both resolve
+	// (`-m 3-5-flash` is shell-friendly, `-m 3.5-flash` reads naturally).
+	"3.5-flash":  "gemini-4-hydrogen",
+	"3-5-flash":  "gemini-4-hydrogen",
+	"flash-3.5":  "gemini-4-hydrogen",
+	"flash35":    "gemini-4-hydrogen",
+	"gemini-3.5": "gemini-4-hydrogen",
 }
 
 const helpMedia = `qai media — multimodal chat with cached uploads
@@ -193,7 +193,7 @@ Document vision (handwriting / printed page → Markdown):
     No prompt needed — a built-in "transcribe exactly, never summarise"
     template is used. HEIC/HEIF and oversized photos are auto-converted
     to a downscaled JPEG (≤2048px) before upload. Defaults to the
-    gemini-3.5-flash model.
+    gemini-4-hydrogen model.
 
   qai media --translate --to Spanish <file>
     Transcribe faithfully, then output ONLY the translation.
@@ -242,9 +242,9 @@ Sessions:
   qai media sessions --rm <id>     Delete a session and release its cache.
 
 Flags (all subcommands):
-  --model, -m <id>      Override default model. Default: gemini-3.1-flash-lite
-                        (cheapest 3.x flash variant — ~$0.32/M in,
-                        ~$1.88/M out, with cached reads at ~$0.03/M).
+  --model, -m <id>      Override default model. Default: gemini-4-hydrogen
+                        (~$1.88/M in, ~$9.38/M out, with cached reads
+                        at ~$0.09/M).
                         Aliases: gemini, flash, flash-lite, gemini-pro.
   --template, -t <name> Named audit-profile system prompt — same
                         registry as 'qai chat --template'. Default

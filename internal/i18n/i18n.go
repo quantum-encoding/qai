@@ -87,7 +87,7 @@ translate flags:
   --to <codes>          comma-separated target codes (e.g. es,fr,de)
   --key  <dot.path>     optional context for the model
   --app  <name>         optional app name for tone context
-  --model <id>          chat model id (default claude-sonnet-4-6)
+  --model <id>          chat model id (default claude-sonnet-5-5)
 
 apply flags:
   --repo <path>         repo root (uses --i18n-dir + --locale to resolve file)
@@ -291,7 +291,7 @@ func runTranslate(args []string) {
 	to := fs.String("to", "", "comma-separated target locale codes (e.g. es,fr,de)")
 	key := fs.String("key", "", "optional key path for context")
 	app := fs.String("app", "", "optional app name for tone context")
-	model := fs.String("model", "", "chat model id (default claude-sonnet-4-6)")
+	model := fs.String("model", "", "chat model id (default claude-sonnet-5-5)")
 	format := fs.String("format", "json", "output format (json | table)")
 	_ = fs.Parse(args)
 

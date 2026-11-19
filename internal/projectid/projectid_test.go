@@ -352,6 +352,22 @@ func TestResolveEditTargetNonResolvableFallsThrough(t *testing.T) {
 	}
 }
 
+// TestMain points EditTargetFile at a path that never exists, so the
+// real ~/.qai/target-edit-path (written by the edit hook on a dev
+// machine) cannot take precedence over the cwd-based rules under test.
+// Tests that exercise the edit-target rule swap in their own pointer
+// with withEditTarget.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "projectid-test-")
+	if err != nil {
+		panic(err)
+	}
+	EditTargetFile = filepath.Join(dir, "target-edit-path")
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 // withEditTarget swaps the package-level EditTargetFile for the test
 // duration. Restored on cleanup.
 func withEditTarget(t *testing.T, path string) {
